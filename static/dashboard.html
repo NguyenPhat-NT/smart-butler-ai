@@ -1,0 +1,2749 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Smart Butler AI • Smart Home Hub</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --bg2: #121a30;
+      --card: rgba(22, 31, 56, 0.88);
+      --border: rgba(148, 163, 184, 0.16);
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #f472b6;
+      --accent2: #60a5fa;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #fb7185;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at top right, #1e1b4b 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.45;
+    }
+    .hidden { display: none !important; }
+    .container { max-width: 1120px; margin: 0 auto; padding: 14px 14px 56px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      backdrop-filter: blur(10px);
+    }
+    .grid { display: grid; gap: 12px; }
+    .grid > * { min-width: 0; }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .between { justify-content: space-between; }
+    h1, h2, h3 { margin: 0 0 8px; font-weight: 650; }
+    h1 { font-size: 1.15rem; }
+    h2 { font-size: 1rem; color: #f8fafc; }
+    h3 { font-size: 0.92rem; color: var(--muted); font-weight: 600; }
+    .muted { color: var(--muted); font-size: 0.84rem; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.84rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 9px; border-radius: 999px; font-size: 0.77rem; font-weight: 600;
+      border: 1px solid var(--border); background: rgba(15, 23, 42, 0.7);
+    }
+    .b-ok { color: var(--ok); border-color: rgba(52, 211, 153, 0.35); background: rgba(16, 185, 129, 0.12); }
+    .b-warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(245, 158, 11, 0.12); }
+    .b-err { color: var(--err); border-color: rgba(251, 113, 133, 0.35); background: rgba(244, 63, 94, 0.12); }
+    .b-info { color: var(--accent2); border-color: rgba(96, 165, 250, 0.35); background: rgba(59, 130, 246, 0.12); }
+    .b-pink { color: var(--accent); border-color: rgba(244, 114, 182, 0.35); background: rgba(236, 72, 153, 0.12); }
+
+    input, select, textarea {
+      background: #0f172a; color: var(--text); border: 1px solid var(--border);
+      border-radius: 10px; padding: 8px 11px; font-size: 0.9rem; font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent2); }
+    button {
+      border: 1px solid var(--border); background: #1e293b; color: var(--text);
+      padding: 8px 13px; border-radius: 10px; font-size: 0.86rem; font-weight: 600;
+      cursor: pointer; transition: 0.15s ease;
+    }
+    button:hover { background: #334155; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: linear-gradient(135deg, #ec4899, #8b5cf6); border-color: transparent; color: #fff; }
+    .btn-primary:hover { filter: brightness(1.08); }
+    .btn-blue { background: #2563eb; border-color: transparent; color: #fff; }
+    .btn-blue:hover { background: #1d4ed8; }
+    .btn-danger { background: rgba(244, 63, 94, 0.18); border-color: rgba(244, 63, 94, 0.4); color: #fda4af; }
+    .btn-danger:hover { background: rgba(244, 63, 94, 0.3); }
+    .btn-sm { padding: 5px 9px; font-size: 0.78rem; border-radius: 8px; }
+
+    header.topbar {
+      position: sticky; top: 0; z-index: 20;
+      background: rgba(11, 16, 32, 0.88); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border); padding: 10px 14px;
+    }
+    .tabs {
+      display: flex; gap: 6px; overflow-x: auto; padding: 10px 0 6px;
+      scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      white-space: nowrap; padding: 7px 13px; border-radius: 999px;
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+    }
+    .tab-btn.active {
+      background: rgba(244, 114, 182, 0.16); border-color: rgba(244, 114, 182, 0.5); color: #fbcfe8;
+    }
+    .bar-bg { height: 7px; border-radius: 999px; background: rgba(148,163,184,0.16); overflow: hidden; margin-top: 4px; }
+    .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+
+    .login-wrap {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .login-box { width: 100%; max-width: 380px; }
+
+    .item-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .item-list > .item-card { flex-shrink: 0; }
+    .item-card {
+      background: rgba(15, 23, 42, 0.68); border: 1px solid var(--border);
+      border-radius: 11px; padding: 10px 12px;
+    }
+    .chat-user { border-left: 3px solid var(--accent2); }
+    .chat-model { border-left: 3px solid var(--accent); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
+    .table-wrap { overflow-x: auto; }
+
+    .toast-stack {
+      position: fixed; right: 14px; bottom: 14px; z-index: 60;
+      display: flex; flex-direction: column; gap: 8px; max-width: min(360px, calc(100vw - 28px));
+    }
+    .toast {
+      background: #1e293b; border: 1px solid rgba(96, 165, 250, 0.45);
+      border-radius: 12px; padding: 10px 13px; box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+      animation: slideIn 0.2s ease;
+    }
+    .toast.warn { border-color: rgba(251, 191, 36, 0.6); }
+    .toast.err { border-color: rgba(251, 113, 133, 0.6); }
+    @keyframes slideIn { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+    .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+    .field label { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+    .stat-num { font-size: 1.45rem; font-weight: 700; color: #f8fafc; }
+    input[type="range"] { padding: 0; width: 100%; accent-color: var(--accent); }
+    .switch-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border);
+    }
+    .switch-row:last-child { border-bottom: none; }
+    input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <!-- LOGIN VIEW -->
+  <section id="loginView" class="login-wrap">
+    <div class="card login-box">
+      <div class="row between" style="margin-bottom: 10px;">
+        <h1>🏠 Smart Butler Dashboard</h1>
+        <span class="badge b-pink">Smart Home LAN</span>
+      </div>
+      <p class="muted" style="margin-top:0;">Nhập mã PIN bảo mật (xem qua lệnh Telegram <span class="mono">/dashboard</span> hoặc <span class="mono">.env</span>).</p>
+      <form id="loginForm">
+        <div class="field">
+          <label for="pinInput">Mã PIN Dashboard</label>
+          <input id="pinInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Nhập mã PIN..." required />
+        </div>
+        <button type="submit" class="btn-primary" style="width:100%;">Đăng nhập</button>
+        <p id="loginErr" class="muted" style="color:var(--err); margin:8px 0 0;"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- MAIN APP -->
+  <div id="appView" class="hidden">
+    <header class="topbar">
+      <div class="container" style="padding:0;">
+        <div class="row between">
+          <div class="row">
+            <h1 id="hdrBrandTitle" style="margin:0;">🏠 Smart Butler • Home Hub</h1>
+            <span id="hdrPresenceBadge" class="badge b-info">Presence: ...</span>
+            <span id="hdrSseBadge" class="badge b-warn">SSE: đang nối</span>
+          </div>
+          <div class="row">
+            <button id="btnAudioEnable" class="btn-sm" title="Bật âm báo & Web Notification trên trình duyệt này">🔔 Bật chuông Web</button>
+            <button id="btnRefreshAll" class="btn-sm">↻ Làm mới</button>
+            <button id="btnLogout" class="btn-sm btn-danger">Thoát</button>
+          </div>
+        </div>
+        <nav class="tabs" id="tabNav">
+          <button class="tab-btn active" data-tab="overview">Tổng quan</button>
+          <button class="tab-btn" data-tab="memories">Ký ức</button>
+          <button class="tab-btn" data-tab="journal">Nhật ký</button>
+          <button class="tab-btn" data-tab="engine">Nhịp sống</button>
+          <button class="tab-btn" data-tab="profile">Persona & Hồ sơ</button>
+          <button class="tab-btn" data-tab="chats">Chat & Lịch hẹn</button>
+          <button class="tab-btn" data-tab="lan">Thiết bị LAN & Cài đặt</button>
+          <button class="tab-btn" data-tab="backups">Sao lưu & Watchdog</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container">
+
+      <!-- TAB 1: OVERVIEW -->
+      <section id="tab-overview" class="tab-panel">
+        <div class="grid grid-3">
+          <div class="card">
+            <h3>🏠 LAN Presence (Ẩn)</h3>
+            <div id="ovPresenceMain" class="stat-num">...</div>
+            <div id="ovPresenceDetail" class="muted" style="margin-top:6px;"></div>
+          </div>
+          <div class="card">
+            <h3>🎙️ PC Bridge (TTS &amp; Tải Nhạc)</h3>
+            <div id="ovTtsMain" class="stat-num">...</div>
+            <div id="ovTtsDetail" class="muted" style="margin-top:6px;"></div>
+            <div id="ovMusicDlLine" class="muted" style="margin-top:4px;"></div>
+          </div>
+          <div class="card">
+            <h3>🛡️ Watchdog Mạng</h3>
+            <div id="ovWdMain" class="stat-num">...</div>
+            <div id="ovWdDetail" class="muted" style="margin-top:6px;"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-2" style="margin-top:12px;">
+          <div class="card">
+            <h2>📊 Chỉ số & Gemini API Pool</h2>
+            <div id="ovStatsBlock" class="muted">Đang tải...</div>
+          </div>
+          <div class="card">
+            <div class="row between">
+              <h2>🔔 Thông báo tại chỗ</h2>
+              <div class="row">
+                <label class="row muted" style="font-size:0.78rem; gap:4px;">
+                  <input type="checkbox" id="chkTestSpeak" /> Đọc TTS
+                </label>
+                <button id="btnTestNotify" class="btn-sm btn-blue">Test Chuông</button>
+              </div>
+            </div>
+            <div id="ovNotifyList" class="item-list"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🎙️ Nghe thử Nhấn nhá &amp; Giọng Trợ Lý TTS</h2>
+            <span id="ttsAuditionStatus" class="muted" style="font-size:0.8rem;">Sẵn sàng</span>
+          </div>
+          <div class="row" style="margin-bottom:8px; gap:8px; flex-wrap:wrap;">
+            <select id="ttsAuditionMood" style="min-width:190px;">
+              <option value="">Tâm trạng: Tự động theo câu</option>
+              <optgroup label="Vui &amp; Tích cực">
+                <option value="vui vẻ">😄 Vui vẻ</option>
+                <option value="hào hứng">✨ Hào hứng</option>
+                <option value="bất ngờ">😲 Bất ngờ / Ngạc nhiên</option>
+              </optgroup>
+              <optgroup label="Dịu dàng &amp; Yêu thương">
+                <option value="ngọt ngào" selected>💗 Ngọt ngào / Dịu dàng</option>
+                <option value="nũng nịu">🥹 Nũng nịu / Làm nũng</option>
+                <option value="ngại ngùng">😳 Ngại ngùng / E thẹn</option>
+                <option value="lo lắng">🫧 Lo lắng / Quan tâm</option>
+              </optgroup>
+              <optgroup label="Trêu &amp; Cảm xúc mạnh">
+                <option value="cà khịa">😏 Cà khịa / Trêu</option>
+                <option value="dỗi nhẹ">🥺 Dỗi nhẹ / Hờn</option>
+                <option value="cộc nhẹ">😤 Cộc nhẹ</option>
+                <option value="tủi thân">💧 Tủi thân / Buồn</option>
+              </optgroup>
+              <optgroup label="Đêm &amp; Lắng đọng">
+                <option value="thì thầm khuya">🕯️ Thì thầm khuya</option>
+                <option value="lười biếng">🌙 Lười biếng / Buồn ngủ</option>
+                <option value="bình yên">🌿 Bình yên / Tự nhiên</option>
+              </optgroup>
+            </select>
+            <select id="ttsAuditionTod" style="min-width:130px;">
+              <option value="">Khung giờ: Tự động</option>
+              <option value="morning">🌅 Sáng tươi</option>
+              <option value="evening">🌆 Tối ấm</option>
+              <option value="late_night">🌙 Khuya êm dịu</option>
+            </select>
+            <label class="row muted" style="font-size:0.82rem; gap:6px;" title="Cường độ diễn cảm (0.60x nhẹ nhàng – 1.35x giàu cảm xúc)">
+              Cường độ: <input type="range" id="ttsAuditionIntensity" min="0.60" max="1.35" step="0.05" value="1.00" style="width:92px;" />
+              <span id="ttsAuditionIntensityVal">1.00x</span>
+            </label>
+            <label class="row muted" style="font-size:0.82rem; gap:4px;">
+              <input type="checkbox" id="chkTtsProsody" checked /> Bật Prosody DSP
+            </label>
+          </div>
+          <div class="row" style="margin-bottom:8px; gap:4px; flex-wrap:wrap;">
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [cười]">+ [cười]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [cười khúc khích]">+ [cười khúc khích]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [thở dài]">+ [thở dài]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [hắng giọng]">+ [hắng giọng]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [hứ]">+ [hứ]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [ngập ngừng]">+ [ngập ngừng]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [ngạc nhiên]">+ [ngạc nhiên]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [thì thầm]">+ [thì thầm]</button>
+            <button type="button" class="btn-sm tts-cue-btn" data-cue=" *nhấn*">+ *nhấn*</button>
+          </div>
+          <div class="row" style="gap:8px; flex-wrap:wrap;">
+            <input id="ttsAuditionText" value="Anh ơi... hôm nay làm việc có mệt lắm không [thở dài]? Tối nay em *thương* anh nhiều xíu nè [cười]." style="flex:1; min-width:240px;" />
+            <button type="button" id="btnTtsAuditionBrowser" class="btn-sm btn-pink">▶ Nghe trình duyệt</button>
+            <button type="button" id="btnTtsAuditionEsp32" class="btn-sm btn-blue">🔊 Đọc loa ESP32</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🖥️ Sức khỏe Hệ thống OpenStick</h2>
+            <div class="row">
+              <span id="sysTempBadge" class="badge b-info">🌡️ —°C</span>
+              <span id="sysDspBadge" class="badge b-info">DSP: —</span>
+              <span id="sysAuditBadge" class="badge b-ok">Logic Audit: —</span>
+              <span id="sysUptimeBadge" class="badge b-info">⏱️ —</span>
+            </div>
+          </div>
+          <div id="ovSystemGrid" class="grid grid-3">
+            <div class="muted">Đang đọc thông số phần cứng...</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🔊 Loa Thông Minh ESP32-C3 &amp; Jukebox (Độc lập trên USB)</h2>
+            <div class="row">
+              <span id="jbEspBadge" class="badge b-warn">ESP32: đang chờ</span>
+              <span id="jbDhtBadge" class="badge b-info">🌡️ —°C • 💧 —%</span>
+            </div>
+          </div>
+
+          <div class="grid grid-2">
+            <div>
+              <div id="jbAlarmRingingBanner" class="item-card hidden" style="margin-bottom:8px; border-color:var(--danger); background:rgba(244,63,94,0.12);">
+                <div class="row between">
+                  <strong id="jbAlarmRingingText">⏰ Báo thức đang kêu!</strong>
+                  <div class="row">
+                    <button type="button" class="btn-sm btn-blue" onclick="jukeboxSession('snooze_alarm', {minutes: 5})">💤 +5p</button>
+                    <button type="button" class="btn-sm btn-danger" onclick="jukeboxSession('dismiss_alarm')">⏹️ Tắt</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="jbSessionBanner" class="item-card hidden" style="margin-bottom:8px; border-color:var(--pink);">
+                <div class="row between">
+                  <div>
+                    <strong id="jbSessionTitle">🎯 Đang tập trung</strong>
+                    <span id="jbSessionCountdown" class="badge b-pink mono" style="margin-left:6px;">00:00</span>
+                    <span id="jbSessionQuietBadge" class="badge b-info hidden" style="margin-left:4px;">🔕 Tạm yên lặng chat</span>
+                  </div>
+                  <button type="button" class="btn-sm" onclick="jukeboxSession('cancel_session')">Hủy phiên</button>
+                </div>
+              </div>
+
+              <div id="jbNowPlayingBox" class="item-card" style="margin-bottom:8px;">
+                <div class="muted">Chưa phát bài nào.</div>
+              </div>
+
+              <div id="jbNoticeBox" class="item-card hidden" style="margin-bottom:8px; font-size:0.82rem;"></div>
+
+              <div class="row" style="margin-bottom:8px;">
+                <button id="btnJbToggle" type="button" class="btn-sm btn-pink">⏯️ Play / Pause</button>
+                <button id="btnJbSkip" type="button" class="btn-sm btn-blue">⏭️ Qua bài</button>
+                <button id="btnJbStop" type="button" class="btn-sm btn-danger">⏹️ Dừng</button>
+                <label class="row muted" style="font-size:0.82rem; gap:4px;">
+                  <input type="checkbox" id="chkJbAutoDj" checked /> Auto-DJ
+                </label>
+                <label class="row muted" style="font-size:0.82rem; gap:4px;">
+                  <input type="checkbox" id="chkJbVoiceAutoplay" /> Tự phát voice ra loa
+                </label>
+              </div>
+
+              <div class="row" style="margin-bottom:8px;">
+                <span class="muted" style="min-width:74px;">Âm lượng:</span>
+                <input id="jbVolSlider" type="range" min="0" max="100" value="12" style="flex:1; min-width:120px;" />
+                <span id="jbVolVal" class="mono" style="min-width:42px;">12%</span>
+                <button type="button" class="btn-sm" onclick="jukeboxCtrl('sleep_timer', 30)">🌙 Hẹn 30p</button>
+                <button type="button" class="btn-sm" onclick="jukeboxCtrl('sleep_timer', 0)">Hủy hẹn</button>
+              </div>
+
+              <form id="jukeboxPlayForm" class="row" style="margin-bottom:10px;">
+                <input id="jukeboxQueryInput" placeholder="Tên bài hát, link YouTube hoặc SoundCloud..." style="flex:1; min-width:180px;" />
+                <button type="submit" class="btn-pink">Tải &amp; Phát</button>
+              </form>
+
+              <div class="item-card" style="margin-bottom:8px;">
+                <div class="row" style="margin-bottom:6px;">
+                  <span class="muted" style="font-size:0.82rem;">⏱️ Chế độ:</span>
+                  <input id="jbSessionMins" type="number" min="1" max="360" value="15" style="width:68px;" title="Số phút" />
+                  <button type="button" id="btnJbFocus" class="btn-sm btn-pink">🎯 Focus</button>
+                  <button type="button" id="btnJbChill" class="btn-sm btn-blue">🌿 Chill</button>
+                  <button type="button" id="btnJbNap" class="btn-sm">😴 Chợp mắt</button>
+                </div>
+                <div class="row" style="margin-bottom:6px;">
+                  <input id="jbAlarmTime" type="time" value="06:30" style="width:105px;" />
+                  <input id="jbAlarmLabel" placeholder="Nhãn báo thức..." style="flex:1; min-width:110px;" />
+                  <button type="button" id="btnJbSetAlarm" class="btn-sm btn-blue">⏰ Đặt báo thức</button>
+                </div>
+                <div class="row">
+                  <input id="jbScheduleQuery" placeholder="Bài hát/chủ đề hẹn phát (vd Thanh Xuân)..." style="flex:1; min-width:140px;" />
+                  <input id="jbScheduleDur" type="number" min="0" max="360" value="0" style="width:66px;" title="Thời lượng phát (phút, 0 = phát bình thường)" />
+                  <button type="button" id="btnJbScheduleMusic" class="btn-sm btn-pink">🎵 Hẹn phát nhạc</button>
+                </div>
+                <div id="jbAlarmList" style="margin-top:6px;"></div>
+              </div>
+
+              <div class="item-card">
+                <div class="row between" style="margin-bottom:6px;">
+                  <strong style="font-size:0.86rem;">🎚️ EQ Loa 4cm Thông Hơi (Cắt dưới 60Hz)</strong>
+                  <span id="jbEqActiveTag" class="badge b-ok">Loudness</span>
+                </div>
+                <div class="row" id="jbEqPresetRow" style="margin-bottom:8px;">
+                  <button type="button" class="btn-sm jb-eq-preset" data-preset="loudness">Loudness 4cm</button>
+                  <button type="button" class="btn-sm jb-eq-preset" data-preset="warm">Bass ấm</button>
+                  <button type="button" class="btn-sm jb-eq-preset" data-preset="clear">Focus rõ</button>
+                  <button type="button" class="btn-sm jb-eq-preset" data-preset="flat">Phẳng</button>
+                  <button type="button" class="btn-sm jb-eq-preset" data-preset="off">Tắt EQ</button>
+                </div>
+                <div class="row" style="margin-bottom:4px;">
+                  <span class="muted" style="min-width:74px; font-size:0.8rem;">Bass 135Hz:</span>
+                  <input id="jbEqBass" type="range" min="-6" max="9" step="0.5" value="4" style="flex:1;" />
+                  <span id="jbEqBassVal" class="mono" style="min-width:58px; font-size:0.8rem;">+4.0 dB</span>
+                </div>
+                <div class="row" style="margin-bottom:4px;">
+                  <span class="muted" style="min-width:74px; font-size:0.8rem;">Treble 5.2k:</span>
+                  <input id="jbEqTreble" type="range" min="-6" max="9" step="0.5" value="3.5" style="flex:1;" />
+                  <span id="jbEqTrebleVal" class="mono" style="min-width:58px; font-size:0.8rem;">+3.5 dB</span>
+                </div>
+                <div class="row">
+                  <span class="muted" style="min-width:74px; font-size:0.8rem;">High-pass:</span>
+                  <input id="jbEqHp" type="range" min="40" max="150" step="5" value="60" style="flex:1;" />
+                  <span id="jbEqHpVal" class="mono" style="min-width:58px; font-size:0.8rem;">60 Hz</span>
+                </div>
+                <div class="row between" style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border);">
+                  <label style="font-size:0.82rem; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                    <input type="checkbox" id="chkJbNorm" checked />
+                    <span>Cân bằng âm lượng theo trung bình bài</span>
+                  </label>
+                  <span id="jbNormBadge" class="badge b-ok">Auto</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div class="row between" style="margin-bottom:6px;">
+                <strong>💿 Kho nhạc USB Cache</strong>
+                <span id="jbCacheUsage" class="muted mono">0 bài • 0.0 / 150 MB</span>
+              </div>
+              <div id="jukeboxCacheList" class="item-list" style="max-height:320px; overflow-y:auto; overflow-x:hidden; padding-right:4px;"></div>
+
+              <details id="jbCookiesDetails" style="margin-top:10px;">
+                <summary class="muted" style="cursor:pointer; font-size:0.82rem;">
+                  🍪 YouTube Cookies (chống chặn bot) • <span id="jbCookiesBadge" class="badge b-warn">Chưa nạp</span>
+                </summary>
+                <div class="item-card" style="margin-top:6px;">
+                  <div class="muted" style="font-size:0.78rem; margin-bottom:6px;">
+                    Xuất file <code>cookies.txt</code> (định dạng Netscape) từ trình duyệt đang đăng nhập YouTube rồi chọn file hoặc dán vào đây.
+                  </div>
+                  <div class="row" style="margin-bottom:6px;">
+                    <input id="jbCookiesFile" type="file" accept=".txt" style="flex:1; min-width:140px;" />
+                    <button type="button" id="btnJbCookiesClear" class="btn-sm btn-danger">Xóa Cookies</button>
+                  </div>
+                  <textarea id="jbCookiesText" rows="3" placeholder="# Netscape HTTP Cookie File..." style="width:100%; font-size:0.76rem; margin-bottom:6px;"></textarea>
+                  <button type="button" id="btnJbCookiesSave" class="btn-sm btn-blue">Lưu Cookies</button>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🌬️ Quạt Thông Minh BLDC (ESP-01S)</h2>
+            <div class="row">
+              <span id="fanOnlineBadge" class="badge b-warn">Quạt: Chưa cấu hình</span>
+              <span id="fanFreqBadge" class="badge b-info">— Hz • —%</span>
+              <span id="fanAutoBadge" class="badge b-pink hidden">Tự động</span>
+            </div>
+          </div>
+
+          <div class="grid grid-2">
+            <div>
+              <div id="fanStateSummary" class="item-card" style="margin-bottom:8px;">
+                <div class="muted">Chưa kết nối quạt ESP-01S. Bấm "Quét tìm quạt" hoặc nhập IP/MAC để đồng bộ.</div>
+              </div>
+
+              <div class="row" style="margin-bottom:8px;">
+                <button id="btnFanPower" type="button" class="btn-sm btn-pink">⏻ Bật / Tắt</button>
+                <button id="btnFanModeFixed" type="button" class="btn-sm">💨 Cố định</button>
+                <button id="btnFanModeNatural" type="button" class="btn-sm btn-blue">🍃 Gió tự nhiên</button>
+                <button id="btnFanSleepRamp" type="button" class="btn-sm">🌙 Hạ dần 1005 Hz</button>
+                <button id="btnFanRefresh" type="button" class="btn-sm">🔄</button>
+              </div>
+
+              <div class="row" style="margin-bottom:8px;">
+                <span class="muted" style="min-width:60px;">Tốc độ:</span>
+                <input id="fanSpeedSlider" type="range" min="0" max="40" value="0" style="flex:1; min-width:130px;" />
+                <span id="fanSpeedVal" class="mono" style="min-width:112px; text-align:right;">0% • 1005 Hz</span>
+              </div>
+
+              <div class="row" style="margin-bottom:6px;">
+                <button type="button" class="btn-sm" onclick="fanCtrl('speed', 0)">Ngủ (1005Hz)</button>
+                <button id="btnFanPreset1" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 10))" data-pct="10">Mức 1 (10%)</button>
+                <button id="btnFanPreset2" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 20))" data-pct="20">Mức 2 (20%)</button>
+                <button id="btnFanPreset3" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 30))" data-pct="30">Mức 3 (30%)</button>
+                <button id="btnFanPresetMax" type="button" class="btn-sm btn-blue" onclick="fanCtrl('speed', window._fanMaxPct || 40)">Tối đa (1800Hz)</button>
+              </div>
+            </div>
+
+            <form id="fanConfigForm">
+              <div class="row" style="margin-bottom:6px;">
+                <div class="field" style="flex:1; margin-bottom:0;">
+                  <label for="fanUrlInput">URL ESP-01S (hoặc tự dò)</label>
+                  <input id="fanUrlInput" class="mono" placeholder="http://192.168.1.50" />
+                </div>
+                <div class="field" style="flex:1; margin-bottom:0;">
+                  <label for="fanMacInput">MAC Quạt ESP-01S</label>
+                  <input id="fanMacInput" class="mono" placeholder="aa:bb:cc:dd:ee:ff" />
+                </div>
+                <button id="btnFanScan" type="button" class="btn-blue" style="align-self:flex-end;">🔍 Quét tìm quạt</button>
+              </div>
+
+              <div class="row" style="margin-bottom:6px;">
+                <div class="field" style="flex:1; margin-bottom:0;">
+                  <label for="fanSleepAskTime">Giờ hỏi đi ngủ (VN)</label>
+                  <input id="fanSleepAskTime" type="time" value="01:00" />
+                </div>
+                <div class="field" style="flex:1; margin-bottom:0;">
+                  <label for="fanSleepWaitMins">Chờ trả lời (phút)</label>
+                  <input id="fanSleepWaitMins" type="number" min="5" max="180" value="30" />
+                </div>
+                <div class="field" style="flex:1; margin-bottom:0;">
+                  <label for="fanMaxFreqHz">Tối đa (Hz)</label>
+                  <input id="fanMaxFreqHz" type="number" min="1200" max="3000" step="25" value="1800" />
+                </div>
+              </div>
+
+              <div class="switch-row">
+                <span>Bật tự động hóa Quạt</span>
+                <input type="checkbox" id="chkFanAutoEnabled" checked />
+              </div>
+              <div class="switch-row">
+                <span>Tự tắt khi điện thoại rời Wi-Fi (&gt; grace)</span>
+                <input type="checkbox" id="chkFanAutoAway" checked />
+              </div>
+              <div class="switch-row">
+                <span>Tự bật lại khi điện thoại về Wi-Fi</span>
+                <input type="checkbox" id="chkFanAutoHome" checked />
+              </div>
+              <div class="switch-row">
+                <span>Khuya hỏi ngủ -&gt; giảm dần 1%/1.2s về 0% (1005 Hz)</span>
+                <input type="checkbox" id="chkFanAutoSleep" checked />
+              </div>
+              <div class="switch-row">
+                <span>Gửi kèm giọng nói TTS (Voice) lúc hỏi đi ngủ</span>
+                <input type="checkbox" id="chkFanSleepVoice" />
+              </div>
+              <button type="submit" class="btn-primary btn-sm" style="width:100%; margin-top:8px;">Lưu cấu hình Quạt</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🔌 Ổ Cắm Thông Minh BroadLink SPmini</h2>
+            <div class="row">
+              <span id="plugsCountBadge" class="badge b-info">0 ổ</span>
+              <button id="btnPlugsRefresh" type="button" class="btn-sm">🔄 Làm mới</button>
+              <button id="btnPlugsScan" type="button" class="btn-sm btn-blue">🔍 Quét ổ cắm</button>
+            </div>
+          </div>
+          <div id="plugsGrid" class="grid grid-2">
+            <div class="muted">Đang tải danh sách ổ cắm BroadLink...</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🧠 Thói Quen Tự Học (AI Ngầm)</h2>
+            <div class="row">
+              <span id="habitsCountBadge" class="badge b-info">0 mẫu</span>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;">
+                <input type="checkbox" id="chkHabitsAuto" checked /> Tự động bật/tắt
+              </label>
+              <button id="btnHabitsAnalyze" type="button" class="btn-sm btn-blue">🔄 Phân tích lại</button>
+            </div>
+          </div>
+          <div class="muted" style="font-size:0.82rem; margin-bottom:8px;">
+            Hệ thống tự ghi nhận thói quen sử dụng Quạt, Đèn, Quạt hút &amp; Loa (từ ≥ 3 ngày lặp lại hoặc lời dặn trong chat). Bạn bấm ngược lại trong 10 phút là tự điều chỉnh ngay.
+          </div>
+          <div id="habitsList">
+            <div class="muted">Đang theo dõi thói quen sử dụng thiết bị...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: MEMORIES CRUD -->
+      <section id="tab-memories" class="tab-panel hidden">
+        <div class="card">
+          <div class="row between">
+            <h2>🧠 Kho Ký Ức (<span id="memTotalCount">0</span>)</h2>
+            <div class="row">
+              <input id="memSearch" placeholder="Tìm ký ức..." style="width:180px;" />
+              <select id="memCatFilter">
+                <option value="all">Tất cả loại</option>
+                <option value="general">general (cốt lõi)</option>
+                <option value="personal">personal</option>
+                <option value="preference">preference</option>
+                <option value="schedule">schedule</option>
+                <option value="relationship">relationship</option>
+                <option value="shared_moment">shared_moment</option>
+                <option value="image">image</option>
+                <option value="episode">episode</option>
+              </select>
+              <button id="btnMemSearch" class="btn-blue">Tìm</button>
+            </div>
+          </div>
+
+          <form id="memAddForm" class="row" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+            <input id="memNewFact" placeholder="Thêm ký ức / sở thích / ghi chú mới..." style="flex:1; min-width:220px;" required />
+            <select id="memNewCat">
+              <option value="personal">personal</option>
+              <option value="preference">preference</option>
+              <option value="schedule">schedule</option>
+              <option value="relationship">relationship</option>
+              <option value="general">general</option>
+              <option value="shared_moment">shared_moment</option>
+            </select>
+            <select id="memNewImp">
+              <option value="3">Quan trọng 3</option>
+              <option value="2" selected>Quan trọng 2</option>
+              <option value="1">Quan trọng 1</option>
+            </select>
+            <button type="submit" class="btn-primary">+ Thêm & Embed</button>
+          </form>
+
+          <div id="memList" class="item-list"></div>
+          <div class="row between" style="margin-top:12px;">
+            <button id="btnMemPrev" class="btn-sm">← Trước</button>
+            <span id="memPageInfo" class="muted"></span>
+            <button id="btnMemNext" class="btn-sm">Sau →</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: PERSONA & PROFILE -->
+      <section id="tab-profile" class="tab-panel hidden">
+        <div class="grid grid-2">
+          <div class="card">
+            <h2>🎭 Cấu Hình Quản Gia / Trợ Lý AI</h2>
+            <p class="muted" style="margin-top:0; font-size:0.84rem;">
+              Tùy chỉnh danh tính, cách xưng hô và thành phố thời tiết của trợ lý ngay trên Web Dashboard (không cần sửa <span class="mono">.env</span>).
+            </p>
+            <form id="personaForm">
+              <div class="field">
+                <label for="inpButlerName">Tên AI / Quản gia</label>
+                <input id="inpButlerName" placeholder="vd: Jarvis, Nova, Quản gia..." required />
+              </div>
+              <div class="field">
+                <label for="inpOwnerName">Tên / Cách gọi Chủ nhà</label>
+                <input id="inpOwnerName" placeholder="vd: Chủ nhà, Bạn, Minh..." required />
+              </div>
+              <div class="field">
+                <label for="inpButlerStyle">Phong cách giao tiếp</label>
+                <select id="inpButlerStyle">
+                  <option value="butler">Quản gia điềm đạm (butler)</option>
+                  <option value="assistant">Trợ lý chuyên nghiệp (assistant)</option>
+                  <option value="companion">Bạn đồng hành thân thiện (companion)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="inpWeatherCity">Thành phố xem thời tiết</label>
+                <input id="inpWeatherCity" placeholder="vd: Ho Chi Minh, Hanoi, Da Nang..." />
+              </div>
+              <div class="field">
+                <label for="inpCustomNotes">Ghi chú phong cách riêng (tùy chọn)</label>
+                <input id="inpCustomNotes" placeholder="vd: Luôn trả lời ngắn gọn, ưu tiên kiểm tra cảm biến phòng trước..." />
+              </div>
+              <div class="row between" style="margin-top:12px;">
+                <span class="muted" style="font-size:0.78rem;">Áp dụng tức thì cho lượt chat tiếp theo</span>
+                <button type="submit" class="btn-pink">Lưu Persona</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="card">
+            <h2>⚙️ Trạng Thái Phiên &amp; Nhịp Chủ Động</h2>
+            <form id="profileForm">
+              <div class="field">
+                <label>Chỉ số hài lòng / thân thiết (0–100): <strong id="valAffinity">80</strong></label>
+                <input id="inpAffinity" type="range" min="0" max="100" />
+              </div>
+              <div class="field">
+                <label for="inpMood">Trạng thái vận hành hiện tại</label>
+                <input id="inpMood" placeholder="vd: sẵn sàng, tập trung, thư giãn..." />
+              </div>
+              <div class="field">
+                <label>Độ hóm hỉnh (35–80): <strong id="valTease">58</strong></label>
+                <input id="inpTease" type="range" min="35" max="80" />
+              </div>
+              <div class="field">
+                <label>Độ kỹ tính nhắc nhở (25–75): <strong id="valStubborn">48</strong></label>
+                <input id="inpStubborn" type="range" min="25" max="75" />
+              </div>
+              <div class="field">
+                <label>Mức độ quan tâm chủ động (35–80): <strong id="valClingy">62</strong></label>
+                <input id="inpClingy" type="range" min="35" max="80" />
+              </div>
+              <div class="row between" style="margin-top:12px;">
+                <label class="row muted"><input type="checkbox" id="chkResetUnanswered" /> Reset bộ đếm tin chủ động chưa rep (<span id="valUnanswered">0</span>)</label>
+                <button type="submit" class="btn-primary">Lưu trạng thái</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: CHATS & REMINDERS -->
+      <section id="tab-chats" class="tab-panel hidden">
+        <div class="grid grid-2">
+          <div class="card">
+            <h2>⏰ Lịch Hẹn &amp; Nhắc Nhở</h2>
+            <form id="remAddForm" class="grid" style="gap:8px; margin-bottom:10px;">
+              <input id="remTitle" placeholder="Nội dung nhắc (vd: Nhắc uống nước, tắt bếp...)" required />
+              <div class="row">
+                <input id="remMins" type="number" min="1" value="30" style="width:110px;" title="Số phút nữa nhắc" />
+                <span class="muted">phút nữa</span>
+                <select id="remKind">
+                  <option value="user_reminder">Nhắc hẹn chủ nhà đặt</option>
+                  <option value="ai_followup">Trợ lý tự hỏi thăm</option>
+                </select>
+                <button type="submit" class="btn-primary btn-sm">+ Tạo hẹn</button>
+              </div>
+            </form>
+            <div id="remList" class="item-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="row between">
+              <h2>💬 Lịch Sử Chat (<span id="chatTotalCount">0</span>)</h2>
+              <div class="row">
+                <input id="chatSearch" placeholder="Tìm nội dung..." style="width:150px;" />
+                <button id="btnChatSearch" class="btn-sm btn-blue">Tìm</button>
+              </div>
+            </div>
+            <div id="chatList" class="item-list"></div>
+            <div class="row between" style="margin-top:10px;">
+              <button id="btnChatPrev" class="btn-sm">← Mới hơn</button>
+              <span id="chatPageInfo" class="muted"></span>
+              <button id="btnChatNext" class="btn-sm">Cũ hơn →</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: LAN DEVICES & SETTINGS -->
+      <section id="tab-lan" class="tab-panel hidden">
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="row between">
+              <h2>📡 Thiết Bị Trong Mạng LAN</h2>
+              <button id="btnLanScan" class="btn-blue">Quét LAN ngay</button>
+            </div>
+            <p class="muted" style="margin:6px 0 10px;">
+              Mẹo: Trên điện thoại, hãy tắt <strong>Private / Random MAC</strong> cho Wi-Fi gia đình để giữ nguyên MAC thật. PC khi đổi IP DHCP sẽ tự động đồng bộ lại cho TTS Server!
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>IP</th><th>MAC</th><th>Ghi chú</th><th>Gán 1-Click</th></tr>
+                </thead>
+                <tbody id="lanDevicesBody">
+                  <tr><td colspan="4" class="muted">Bấm "Quét LAN ngay" để dò thiết bị đang bật...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>⚙️ Cấu Hình LAN, Watchdog &amp; Backup</h2>
+            <form id="settingsForm">
+              <div class="field">
+                <label for="setPhoneMac">MAC Điện thoại</label>
+                <input id="setPhoneMac" class="mono" placeholder="aa:bb:cc:dd:ee:ff" />
+              </div>
+              <div class="field">
+                <label for="setPcMac">MAC PC (tự tìm IP cho VieNeu-TTS)</label>
+                <input id="setPcMac" class="mono" placeholder="aa:bb:cc:dd:ee:ff" />
+              </div>
+              <div class="field">
+                <label for="setMusicDlUrl">URL PC Tải Nhạc LAN (để trống = tự dò :8091)</label>
+                <input id="setMusicDlUrl" class="mono" placeholder="http://192.168.1.100:8091" />
+              </div>
+              <div class="row">
+                <div class="field" style="flex:1;">
+                  <label for="setAwayGrace">Chờ xác nhận đi vắng (phút)</label>
+                  <input id="setAwayGrace" type="number" min="2" max="60" />
+                </div>
+                <div class="field" style="flex:1;">
+                  <label for="setQuietStart">Giờ ngủ từ (h)</label>
+                  <input id="setQuietStart" type="number" min="0" max="23" />
+                </div>
+                <div class="field" style="flex:1;">
+                  <label for="setQuietEnd">Đến sáng (h)</label>
+                  <input id="setQuietEnd" type="number" min="0" max="12" />
+                </div>
+              </div>
+              <div class="switch-row">
+                <span>Bật tối ưu nhịp Presence ngầm</span>
+                <input type="checkbox" id="setPresenceEn" />
+              </div>
+              <div class="switch-row">
+                <span>Watchdog tự reconnect Wi-Fi (`nmcli`)</span>
+                <input type="checkbox" id="setWdHeal" />
+              </div>
+              <div class="switch-row">
+                <span>Watchdog tự thêm DNS dự phòng 1.1.1.1 / 8.8.8.8</span>
+                <input type="checkbox" id="setWdDns" />
+              </div>
+              <div class="switch-row">
+                <span>Báo Telegram nhẹ khi Watchdog phục hồi</span>
+                <input type="checkbox" id="setWdTg" />
+              </div>
+              <div class="switch-row">
+                <span>Gửi Backup DB qua Telegram hằng ngày</span>
+                <input type="checkbox" id="setBkpTg" />
+              </div>
+              <div class="row" style="margin-top:8px;">
+                <div class="field" style="flex:1;">
+                  <label for="setBkpHour">Giờ gửi Backup (0–23h VN)</label>
+                  <input id="setBkpHour" type="number" min="0" max="23" />
+                </div>
+                <div class="field" style="flex:1;">
+                  <label for="setBkpKeep">Giữ tối đa snapshot (.db.gz)</label>
+                  <input id="setBkpKeep" type="number" min="3" max="30" />
+                </div>
+              </div>
+              <div class="switch-row">
+                <span>Phát âm báo khi có thông báo mới trên Web</span>
+                <input type="checkbox" id="setNotifySound" />
+              </div>
+              <div class="switch-row">
+                <span>Ưu tiên đọc TTS khi PC đang bật VieNeu-TTS</span>
+                <input type="checkbox" id="setNotifyTts" />
+              </div>
+              <button type="submit" class="btn-primary" style="width:100%; margin-top:10px;">Lưu toàn bộ cấu hình</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 6: BACKUPS & WATCHDOG LOG -->
+      <section id="tab-backups" class="tab-panel hidden">
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="row between">
+              <h2>💾 Kho Sao Lưu SQLite (.db.gz)</h2>
+              <div class="row">
+                <button id="btnBkpCreate" class="btn-sm btn-blue">+ Snapshot</button>
+                <button id="btnBkpTg" class="btn-sm btn-primary">Gửi Telegram</button>
+              </div>
+            </div>
+            <form id="restoreUploadForm" class="row" style="margin:10px 0; padding:8px; border:1px dashed var(--border); border-radius:10px;">
+              <input id="restoreFileInput" type="file" accept=".db,.gz,.db.gz" style="flex:1;" />
+              <button type="submit" class="btn-sm btn-danger">Khôi phục từ file</button>
+            </form>
+            <div id="bkpList" class="item-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="row between">
+              <h2>🛡️ Nhật Ký Watchdog & Hệ Thống</h2>
+              <button id="btnWdCheck" class="btn-sm btn-blue">Kiểm tra mạng ngay</button>
+            </div>
+            <div id="wdEventsList" class="item-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: JOURNAL -->
+      <section id="tab-journal" class="tab-panel hidden">
+        <div class="card">
+          <div class="row between">
+            <h2>📔 Nhật Ký Mỗi Ngày & Giấc Mơ Đêm Qua</h2>
+            <button id="btnJournalRefresh" class="btn-sm btn-blue">↻ Tải lại</button>
+          </div>
+          <div id="journalList" class="item-list"></div>
+        </div>
+      </section>
+
+      <!-- TAB: ENGINE / CIRCADIAN / ARBITER -->
+      <section id="tab-engine" class="tab-panel hidden">
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="row between">
+              <h2>🕰️ Nhịp Sinh Học & Động Lực Jiwen</h2>
+              <button id="btnEngineRefresh" class="btn-sm btn-blue">↻ Cập nhật</button>
+            </div>
+            <div id="engCircadianBox" style="margin-top:8px;"></div>
+            <div id="engJiwenBars" style="margin-top:10px;"></div>
+          </div>
+
+          <div class="card">
+            <h2>🎧 Đang Nghe (LAN PC) & 🧵 Mạch Chuyện Đang Mở</h2>
+            <div id="engNowPlayingBox" class="item-card" style="margin-top:8px;"></div>
+            <h3 style="margin-top:12px;">Mạch chuyện còn bỏ ngỏ (Open Loops)</h3>
+            <div id="engOpenLoopsList" class="item-list"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-2" style="margin-top:12px;">
+          <div class="card">
+            <h2>⚖️ Nhật Ký ProactiveArbiter</h2>
+            <div id="engDecisionsList" class="item-list"></div>
+          </div>
+          <div class="card">
+            <h2>🚫 Sổ Từ Chối (Rejection Ledger)</h2>
+            <div class="muted">Các ký ức đã xóa tay trên Dashboard — hệ thống sẽ chặn AI không tự ghi lại.</div>
+            <div id="engRejectedList" class="item-list"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <div id="toastStack" class="toast-stack"></div>
+
+  <script>
+    const state = {
+      overview: null,
+      memOffset: 0,
+      memLimit: 40,
+      chatOffset: 0,
+      chatLimit: 40,
+      sse: null,
+      audioUnlocked: false,
+      audioCtx: null,
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+    const fmtTs = (ts) => ts ? new Date(ts * 1000).toLocaleString("vi-VN") : "—";
+
+    async function api(url, opts = {}) {
+      const headers = opts.headers ? { ...opts.headers } : {};
+      if (opts.body && !(opts.body instanceof FormData) && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(url, { credentials: "same-origin", ...opts, headers });
+      const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+      if (res.status === 401 && url !== "/api/login" && url !== "/api/auth/check") {
+        showLogin();
+        throw new Error("Phiên đăng nhập đã hết hạn.");
+      }
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `Lỗi HTTP ${res.status}`);
+      }
+      return data.data;
+    }
+
+    function showToast(title, body, level = "info") {
+      const el = document.createElement("div");
+      el.className = `toast ${level === "warning" ? "warn" : level === "error" ? "err" : ""}`;
+      el.innerHTML = `<div style="font-weight:700;font-size:0.88rem;">${esc(title)}</div><div class="muted" style="margin-top:2px;">${esc(body)}</div>`;
+      $("toastStack").prepend(el);
+      setTimeout(() => el.remove(), 6500);
+    }
+
+    function playChime() {
+      if (!state.audioUnlocked) return;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        if (!state.audioCtx) state.audioCtx = new Ctx();
+        if (state.audioCtx.state === "suspended") state.audioCtx.resume();
+        const now = state.audioCtx.currentTime;
+        [587.33, 880].forEach((freq, idx) => {
+          const osc = state.audioCtx.createOscillator();
+          const gain = state.audioCtx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(freq, now + idx * 0.11);
+          gain.gain.setValueAtTime(0.08, now + idx * 0.11);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.11 + 0.25);
+          osc.connect(gain); gain.connect(state.audioCtx.destination);
+          osc.start(now + idx * 0.11); osc.stop(now + idx * 0.11 + 0.26);
+        });
+      } catch (_) {}
+    }
+
+    function handleIncomingNotification(item) {
+      showToast(item.title, item.body, item.level);
+      const lanSet = state.overview?.settings?.lan || {};
+      if (lanSet.notify_sound_enabled !== false) {
+        if (item.speak_tts && lanSet.notify_tts_enabled !== false && state.overview?.tts?.online) {
+          const textParam = encodeURIComponent(item.body || item.title || "");
+          const audio = new Audio(`/api/tts/speak_alert?text=${textParam}`);
+          audio.play().catch(() => playChime());
+        } else {
+          playChime();
+        }
+      }
+      if ("Notification" in window && Notification.permission === "granted") {
+        try { new Notification(item.title, { body: item.body }); } catch (_) {}
+      }
+      if (state.overview) {
+        state.overview.notifications = [item, ...(state.overview.notifications || [])].slice(0, 25);
+        renderOverview();
+      }
+    }
+
+    function connectSSE() {
+      if (state.sse) { state.sse.close(); state.sse = null; }
+      const es = new EventSource("/api/events");
+      state.sse = es;
+      es.addEventListener("init", () => {
+        $("hdrSseBadge").className = "badge b-ok";
+        $("hdrSseBadge").textContent = "SSE: realtime";
+      });
+      es.addEventListener("presence_update", (ev) => {
+        if (state.overview) {
+          state.overview.presence = JSON.parse(ev.data);
+          renderOverview();
+        }
+      });
+      es.addEventListener("watchdog_update", (ev) => {
+        if (state.overview) {
+          state.overview.watchdog = JSON.parse(ev.data);
+          renderOverview();
+        }
+      });
+      es.addEventListener("local_notify", (ev) => {
+        handleIncomingNotification(JSON.parse(ev.data));
+      });
+      es.addEventListener("backup_update", (ev) => {
+        if (state.overview) {
+          state.overview.backup = JSON.parse(ev.data);
+          renderOverview();
+        }
+      });
+      es.addEventListener("now_playing_update", (ev) => {
+        if (state.overview) {
+          state.overview.now_playing = JSON.parse(ev.data);
+          renderOverview();
+        }
+      });
+      es.addEventListener("jukebox_update", (ev) => {
+        if (state.overview) {
+          state.overview.jukebox = JSON.parse(ev.data);
+          renderJukebox();
+        }
+      });
+      es.addEventListener("dht11_update", (ev) => {
+        if (state.overview) {
+          const dht = JSON.parse(ev.data);
+          state.overview.dht11 = dht;
+          if (state.overview.jukebox) state.overview.jukebox.dht11 = dht;
+          renderJukebox();
+        }
+      });
+      es.addEventListener("fan_update", (ev) => {
+        if (state.overview) {
+          state.overview.fan = JSON.parse(ev.data);
+          renderFan();
+          syncFanForm(state.overview.fan?.settings);
+        }
+      });
+      es.addEventListener("plugs_update", (ev) => {
+        if (state.overview) {
+          state.overview.plugs = JSON.parse(ev.data);
+          renderPlugs();
+        }
+      });
+      es.addEventListener("habits_update", (ev) => {
+        if (state.overview) {
+          state.overview.habits = JSON.parse(ev.data);
+          renderHabits();
+        }
+      });
+      es.onerror = () => {
+        $("hdrSseBadge").className = "badge b-warn";
+        $("hdrSseBadge").textContent = "SSE: đang nối lại...";
+      };
+    }
+
+    const PRESENCE_LABELS = {
+      home_pc: ["💻 Ở phòng • PC đang bật", "b-ok"],
+      home_idle: ["📱 Ở phòng (Điện thoại)", "b-info"],
+      away: ["🚶 Đang ra ngoài", "b-warn"],
+      sleeping_late: ["🌙 Đêm khuya / Đang ngủ", "b-pink"],
+      unconfigured: ["⚙️ Chưa gán thiết bị MAC", "b-warn"],
+    };
+
+    function renderOverview() {
+      const ov = state.overview;
+      if (!ov) return;
+      const p = ov.presence || {};
+      const [pLabel, pClass] = PRESENCE_LABELS[p.state] || [p.state || "—", "b-info"];
+      $("hdrPresenceBadge").className = `badge ${pClass}`;
+      $("hdrPresenceBadge").textContent = pLabel;
+      $("ovPresenceMain").textContent = pLabel;
+      $("ovPresenceDetail").innerHTML =
+        `Điện thoại: <strong>${p.phone_online ? "Online" : "Offline"}</strong> (${esc(p.phone_ip || p.phone_mac || "chưa gán")})<br>` +
+        `PC: <strong>${p.pc_online ? "Online" : "Offline"}</strong> (${esc(p.pc_ip || p.pc_mac || "chưa gán")})`;
+
+      const tts = ov.tts || {};
+      const musicDl = ov.music_dl || {};
+      $("ovTtsMain").textContent = tts.online ? "🟢 TTS Đang sẵn sàng" : "⚪ TTS Đang tắt / Nghỉ";
+      $("ovTtsDetail").innerHTML = `TTS URL: <span class="mono">${esc(tts.effective_url || "chưa cấu hình")}</span>`;
+      $("ovMusicDlLine").innerHTML = `Tải nhạc PC: ${musicDl.online ? "🟢 Sẵn sàng" : "⚪ Cục bộ OpenStick"} ${musicDl.effective_url ? `(<span class="mono">${esc(musicDl.effective_url)}</span>)` : ""}`;
+
+      const wd = ov.watchdog || {};
+      const wdMap = {
+        healthy: "🟢 Ổn định 3 tầng",
+        dns_degraded: "🟡 Lỗi DNS",
+        gateway_down: "🔴 Mất Wi-Fi / GW",
+        internet_down: "🟠 Mất Internet",
+        starting: "⏳ Đang khởi kiểm...",
+      };
+      $("ovWdMain").textContent = wdMap[wd.status] || wd.status;
+      $("ovWdDetail").innerHTML =
+        `GW: ${wd.gateway_ok ? "OK" : "LỖI"} • Net: ${wd.internet_ok ? "OK" : "LỖI"} • DNS: ${wd.dns_ok ? "OK" : "LỖI"}<br>` +
+        `Tự phục hồi: ${wd.heals_count || 0} lần • Sự cố: ${wd.outages_count || 0}`;
+
+      const prof = ov.profile || {};
+      const q = ov.quota || {};
+      const bkp = ov.backup || {};
+      const cds = (q.active_cooldowns || []).map((c) => `${c.model}(${c.key_tail}): ${c.remaining_sec}s`).join(", ") || "Không có";
+      $("ovStatsBlock").innerHTML = `
+        <div class="row" style="margin-bottom:8px;">
+          <span class="badge b-pink">Affinity: ${prof.affinity_score ?? "—"}/100</span>
+          <span class="badge b-info">Mood: ${esc(prof.mood || "—")}</span>
+          <span class="badge b-ok">Chat: ${ov.counts?.chats ?? 0}</span>
+          <span class="badge b-ok">Ký ức: ${ov.counts?.memories ?? 0}</span>
+          <span class="badge b-warn">Hẹn chờ: ${ov.counts?.pending_reminders ?? 0}</span>
+        </div>
+        <div>Chat Model: <span class="mono">${esc(q.chat_model)}</span> | Memory: <span class="mono">${esc(q.memory_model)}</span></div>
+        <div>Giờ hệ thống: <span class="mono">${esc(ov.circadian?.time_str || "—")} (${esc(ov.circadian?.date_str || "—")})</span> • <span class="badge b-info">${esc(ov.circadian?.label_vi || "—")}</span>${ov.now_playing?.active ? ` • 🎧 <span class="mono">${esc(ov.now_playing.title)}</span>` : ""}</div>
+        <div>API Keys (${q.key_count || 0}): <span class="mono">${esc((q.keys_masked || []).join(", "))}</span></div>
+        <div>Cooldown 429: ${esc(cds)}</div>
+        <div>Backup gần nhất: ${bkp.latest ? `${esc(bkp.latest.filename)} (${(bkp.latest.size_bytes/1024).toFixed(1)} KB)` : "Chưa có"} • Tổng ${bkp.count || 0} bản</div>
+      `;
+
+      const notifs = ov.notifications || [];
+      $("ovNotifyList").innerHTML = notifs.length
+        ? notifs.slice(0, 10).map((n) => `
+          <div class="item-card">
+            <div class="row between"><strong>${esc(n.title)}</strong><span class="muted">${fmtTs(n.created_at)}</span></div>
+            <div class="muted">${esc(n.body)}</div>
+          </div>`).join("")
+        : `<div class="muted">Chưa có thông báo nội bộ mới trong phiên này.</div>`;
+
+      renderSystemHealth(ov.system);
+      renderJukebox();
+      renderFan();
+      renderPlugs();
+      renderHabits();
+      if (!window._fanFormInitialized) {
+        syncFanForm(ov.fan?.settings || ov.settings?.fan);
+        window._fanFormInitialized = true;
+      }
+    }
+
+    function pctToFanHz(pct) {
+      return Math.round(1005 + Math.max(0, Math.min(100, Number(pct || 0))) * 19.95);
+    }
+
+    function applyFanSpeedCap(cfg) {
+      const maxHz = Math.max(1200, Math.min(3000, Number(cfg?.max_freq_hz || 1800)));
+      const maxPct = Math.max(10, Math.min(100, Number(cfg?.max_speed_pct || Math.round((maxHz - 1005) / 19.95))));
+      window._fanMaxPct = maxPct;
+      const slider = $("fanSpeedSlider");
+      if (slider) slider.max = String(maxPct);
+      [["btnFanPreset1", 0.25, "Mức 1"], ["btnFanPreset2", 0.5, "Mức 2"], ["btnFanPreset3", 0.75, "Mức 3"]].forEach(([id, ratio, label]) => {
+        const el = $(id);
+        if (!el) return;
+        const p = Math.max(1, Math.round(maxPct * ratio));
+        el.dataset.pct = String(p);
+        el.textContent = `${label} (${p}%)`;
+      });
+      const maxBtn = $("btnFanPresetMax");
+      if (maxBtn) maxBtn.textContent = `Tối đa (${maxHz}Hz)`;
+      return { maxHz, maxPct };
+    }
+
+    function syncFanForm(cfg) {
+      if (!cfg) return;
+      applyFanSpeedCap(cfg);
+      const ae = document.activeElement;
+      const isEditing = ae && ae.closest && ae.closest("#fanConfigForm");
+      if (isEditing) return;
+      $("fanUrlInput").value = cfg.fan_url || "";
+      $("fanMacInput").value = cfg.fan_mac || "";
+      $("fanSleepAskTime").value = cfg.sleep_ask_time || "01:00";
+      $("fanSleepWaitMins").value = cfg.sleep_wait_mins ?? 30;
+      $("fanMaxFreqHz").value = cfg.max_freq_hz ?? 1800;
+      $("chkFanAutoEnabled").checked = cfg.auto_enabled !== false;
+      $("chkFanAutoAway").checked = cfg.auto_away !== false;
+      $("chkFanAutoHome").checked = cfg.auto_home !== false;
+      $("chkFanAutoSleep").checked = cfg.auto_sleep !== false;
+      $("chkFanSleepVoice").checked = Boolean(cfg.sleep_voice);
+    }
+
+    function renderFan() {
+      const fan = state.overview?.fan;
+      if (!fan) return;
+      const { maxPct } = applyFanSpeedCap(fan.settings);
+      const st = fan.state;
+      const auto = fan.automation || {};
+      const onlineBadge = $("fanOnlineBadge");
+      const freqBadge = $("fanFreqBadge");
+      const autoBadge = $("fanAutoBadge");
+
+      if (!fan.configured) {
+        onlineBadge.className = "badge b-warn";
+        onlineBadge.textContent = "Quạt: Chưa cấu hình";
+      } else if (fan.online) {
+        onlineBadge.className = "badge b-ok";
+        onlineBadge.textContent = `Quạt: Online (${fan.resolved_ip || "LAN"})`;
+      } else {
+        onlineBadge.className = "badge b-err";
+        onlineBadge.textContent = "Quạt: Offline / Không phản hồi";
+      }
+
+      if (st) {
+        freqBadge.className = `badge ${st.is_on ? "b-ok" : "b-info"}`;
+        freqBadge.textContent = `${st.is_on ? "BẬT" : "TẮT"} • ${st.speed_pct}% (${st.output_freq} Hz) • ${st.mode_label || (st.mode === 1 ? "Gió tự nhiên" : "Cố định")}`;
+        if (document.activeElement !== $("fanSpeedSlider")) {
+          const pctShown = Math.min(maxPct, Number(st.speed_pct ?? 0));
+          $("fanSpeedSlider").value = pctShown;
+          $("fanSpeedVal").textContent = `${st.speed_pct ?? 0}% • ${pctToFanHz(st.speed_pct)} Hz`;
+        }
+        $("btnFanPower").textContent = st.is_on ? "⏻ Tắt quạt" : "⏻ Bật quạt";
+        $("btnFanModeFixed").className = `btn-sm ${st.mode === 0 ? "btn-blue" : ""}`;
+        $("btnFanModeNatural").className = `btn-sm ${st.mode === 1 ? "btn-blue" : ""}`;
+      } else {
+        freqBadge.className = "badge b-info";
+        freqBadge.textContent = "— Hz • —%";
+      }
+
+      if (fan.ramping) {
+        autoBadge.className = "badge b-pink";
+        autoBadge.textContent = "🌙 Đang giảm dần về 0% (1005 Hz)";
+        autoBadge.classList.remove("hidden");
+      } else if (auto.sleep_prompt_status === "waiting") {
+        const minsLeft = Math.max(1, Math.ceil((auto.sleep_countdown_sec || 0) / 60));
+        autoBadge.className = "badge b-warn";
+        autoBadge.textContent = `🌙 Đã hỏi ngủ (còn ${minsLeft}p)`;
+        autoBadge.classList.remove("hidden");
+      } else if (auto.manual_override_sec > 0) {
+        autoBadge.className = "badge b-info";
+        autoBadge.textContent = `✋ Tạm nhường tay (${Math.ceil(auto.manual_override_sec / 60)}p)`;
+        autoBadge.classList.remove("hidden");
+      } else {
+        autoBadge.classList.add("hidden");
+      }
+
+      const statusLine = st
+        ? `<strong>${st.is_on ? "🟢 Đang chạy" : "⚪ Đang tắt"}</strong> (${esc(st.status_text || st.status || "OK")}) • <strong>${st.speed_pct}%</strong> / <span class="mono">${st.output_freq} Hz</span> • Chế độ: <strong>${esc(st.mode_label)}</strong>`
+        : `<span class="muted">${esc(fan.last_error || "Chưa đọc được trạng thái từ ESP-01S.")}</span>`;
+      const metaLine = `URL: <span class="mono">${esc(fan.fan_url || "chưa có")}</span> • MAC: <span class="mono">${esc(fan.fan_mac || "chưa gán")}</span>`;
+      $("fanStateSummary").innerHTML = `<div>${statusLine}</div><div class="muted" style="font-size:0.78rem; margin-top:4px;">${metaLine}</div>`;
+    }
+
+    window.fanCtrl = async (action, value = null) => {
+      try {
+        const res = await api("/api/fan/control", {
+          method: "POST",
+          body: JSON.stringify({ action, value }),
+        });
+        if (state.overview && res.fan) {
+          state.overview.fan = res.fan;
+          renderFan();
+        }
+      } catch (e) {
+        showToast("Lỗi điều khiển Quạt", e.message, "error");
+      }
+    };
+
+    function renderPlugs() {
+      const plugs = state.overview?.plugs || [];
+      const badge = $("plugsCountBadge");
+      if (badge) {
+        const onCnt = plugs.filter((p) => p.online && p.is_on).length;
+        badge.textContent = `${plugs.length} ổ • ${onCnt} đang bật`;
+        badge.className = `badge ${onCnt > 0 ? "b-ok" : "b-info"}`;
+      }
+      const grid = $("plugsGrid");
+      if (!grid) return;
+      if (!plugs.length) {
+        grid.innerHTML = `<div class="muted">Chưa thấy ổ cắm BroadLink nào. Bấm "Quét ổ cắm" khi ổ đã tắt Lock Device trên app.</div>`;
+        return;
+      }
+      grid.innerHTML = plugs.map((p) => {
+        const stBadge = p.locked
+          ? `<span class="badge b-err">Đang khóa LAN</span>`
+          : !p.online
+            ? `<span class="badge b-warn">Offline</span>`
+            : p.is_on
+              ? `<span class="badge b-ok">🟢 Đang BẬT</span>`
+              : `<span class="badge b-info">⚪ Đang TẮT</span>`;
+        const btnCls = p.is_on ? "btn-danger" : "btn-blue";
+        const btnLabel = p.is_on ? "⏻ Tắt ngay" : "⏻ Bật ngay";
+        const tm = p.timer
+          ? `<span class="badge b-pink">⏱️ ${p.timer.action === "on" ? "Bật" : "Tắt"} sau ${Math.max(1, Math.ceil(p.timer.remaining_sec / 60))}p <button type="button" class="btn-sm" style="padding:1px 5px;margin-left:4px;" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'cancel_timer')">✕</button></span>`
+          : "";
+        return `
+        <div class="item-card">
+          <div class="row between" style="margin-bottom:6px;">
+            <div class="row" style="gap:6px;">
+              <strong>${esc(p.icon || "🔌")} ${esc(p.name)}</strong>
+              <button type="button" class="btn-sm" data-mac="${esc(p.mac)}" data-name="${esc(p.name)}" onclick="renamePlug(this.dataset.mac, this.dataset.name)" title="Đổi tên">✏️</button>
+            </div>
+            ${stBadge}
+          </div>
+          <div class="muted mono" style="font-size:0.78rem; margin-bottom:8px;">
+            ${esc(p.ip || "—")} • ${esc(p.mac)}
+          </div>
+          <div class="row" style="margin-bottom:8px;">
+            <button type="button" class="btn-sm ${btnCls}" data-mac="${esc(p.mac)}" data-next="${p.is_on ? "0" : "1"}" onclick="plugCtrl(this.dataset.mac, 'power', this.dataset.next === '1')">${btnLabel}</button>
+            <button type="button" class="btn-sm" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'timer', false, 15)">🌙 Tắt 15p</button>
+            <button type="button" class="btn-sm" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'timer', false, 30)">🌙 30p</button>
+            ${tm}
+          </div>
+          <div class="row" style="font-size:0.8rem; gap:12px;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" ${p.auto_away ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_away: this.checked})" /> Đi vắng tắt
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" ${p.auto_home ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_home: this.checked})" /> Về nhà bật
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+              <input type="checkbox" ${p.auto_sleep ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_sleep: this.checked})" /> Ngủ khuya tắt
+            </label>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    window.plugCtrl = async (mac, action, value = null, delayMinutes = null) => {
+      try {
+        const res = await api("/api/plugs/control", {
+          method: "POST",
+          body: JSON.stringify({ mac, action, value, delay_minutes: delayMinutes }),
+        });
+        if (state.overview && res.plugs) {
+          state.overview.plugs = res.plugs;
+          renderPlugs();
+        }
+      } catch (e) {
+        showToast("Lỗi ổ cắm BroadLink", e.message, "error");
+      }
+    };
+
+    window.plugCfg = async (mac, patch) => {
+      try {
+        const res = await api("/api/plugs/config", {
+          method: "PATCH",
+          body: JSON.stringify({ mac, ...patch }),
+        });
+        if (state.overview && res.plugs) {
+          state.overview.plugs = res.plugs;
+          renderPlugs();
+        }
+      } catch (e) {
+        showToast("Lỗi lưu ổ cắm", e.message, "error");
+      }
+    };
+
+    window.renamePlug = async (mac, oldName) => {
+      const next = window.prompt("Nhập tên mới cho ổ cắm:", oldName || "");
+      if (next && next.trim() && next.trim() !== oldName) {
+        await window.plugCfg(mac, { name: next.trim() });
+      }
+    };
+
+    function fmtDurationShort(sec) {
+      if (sec == null || !Number.isFinite(Number(sec))) return "—";
+      const s = Math.max(0, Math.floor(Number(sec)));
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (d > 0) return `${d}n ${h}g`;
+      if (h > 0) return `${h}g ${m}p`;
+      return `${m}p ${s % 60}s`;
+    }
+
+    function sysMeterHtml(label, mainVal, subText, pct) {
+      const hasPct = pct != null && Number.isFinite(Number(pct));
+      const clamped = hasPct ? Math.max(0, Math.min(100, Number(pct))) : 0;
+      const barStyle = clamped >= 85
+        ? "background: var(--err);"
+        : clamped >= 70
+          ? "background: var(--warn);"
+          : "";
+      return `
+        <div class="item-card" style="padding:9px 11px;">
+          <div class="row between">
+            <span class="muted">${esc(label)}</span>
+            <strong>${esc(mainVal)}</strong>
+          </div>
+          ${hasPct ? `<div class="bar-bg"><div class="bar-fill" style="width:${clamped}%; ${barStyle}"></div></div>` : ""}
+          <div class="muted" style="font-size:0.78rem; margin-top:4px;">${esc(subText)}</div>
+        </div>
+      `;
+    }
+
+    function renderSystemHealth(sys) {
+      if (!sys) return;
+      const tempBadge = $("sysTempBadge");
+      if (sys.temp_c != null) {
+        const tc = Number(sys.temp_c);
+        tempBadge.className = `badge ${tc >= 80 ? "b-err" : tc >= 65 ? "b-warn" : "b-ok"}`;
+        tempBadge.textContent = `🌡️ SoC ${tc.toFixed(1)}°C`;
+      } else {
+        tempBadge.className = "badge b-info";
+        tempBadge.textContent = "🌡️ —°C";
+      }
+
+      const dspBadge = $("sysDspBadge");
+      dspBadge.className = `badge ${sys.dsp_c_loaded ? "b-ok" : "b-warn"}`;
+      dspBadge.textContent = sys.dsp_c_loaded ? "🎛️ DSP: C (libesp32_dsp)" : "🎛️ DSP: Python";
+
+      const auditBadge = $("sysAuditBadge");
+      auditBadge.className = `badge ${sys.logic_audit_enabled ? "b-ok" : "b-warn"}`;
+      auditBadge.textContent = sys.logic_audit_enabled ? "🔍 Soi Logic: Bật" : "🔍 Soi Logic: Tắt";
+
+      $("sysUptimeBadge").textContent = `⏱️ Máy ${fmtDurationShort(sys.uptime_sec)} • Bot ${fmtDurationShort(sys.process_uptime_sec)}`;
+
+      const cards = [];
+      const loadStr = Array.isArray(sys.load_avg) ? sys.load_avg.join(" / ") : "—";
+      cards.push(sysMeterHtml(
+        "CPU & Load",
+        sys.cpu_pct != null ? `${sys.cpu_pct}%` : loadStr,
+        `${sys.cpu_cores || 1} nhân • Load: ${loadStr}`,
+        sys.cpu_pct
+      ));
+
+      const ram = sys.ram;
+      if (ram) {
+        const rssNote = sys.bot_rss_mb != null ? ` • Bot RSS: ${sys.bot_rss_mb} MB` : "";
+        cards.push(sysMeterHtml(
+          "RAM Hệ thống",
+          `${ram.used_mb} / ${ram.total_mb} MB (${ram.pct}%)`,
+          `Còn trống khả dụng: ${ram.avail_mb} MB${rssNote}`,
+          ram.pct
+        ));
+      }
+
+      const swap = sys.swap;
+      if (swap && swap.total_mb > 0) {
+        cards.push(sysMeterHtml(
+          "Swap",
+          `${swap.used_mb} / ${swap.total_mb} MB (${swap.pct}%)`,
+          `Còn trống: ${swap.free_mb} MB`,
+          swap.pct
+        ));
+      }
+
+      const root = sys.disk_root;
+      if (root) {
+        cards.push(sysMeterHtml(
+          "Bộ nhớ trong (eMMC)",
+          `${root.used_gb} / ${root.total_gb} GB (${root.pct}%)`,
+          `Còn trống: ${root.free_gb} GB`,
+          root.pct
+        ));
+      }
+
+      const usb = sys.usb || {};
+      if (usb.available && usb.total_mb) {
+        const usedMb = Math.max(0, Number(usb.total_mb) - Number(usb.free_mb || 0));
+        const usbPct = Math.round((usedMb / Number(usb.total_mb)) * 1000) / 10;
+        const usedGb = (usedMb / 1024).toFixed(2);
+        const totalGb = (Number(usb.total_mb) / 1024).toFixed(1);
+        const freeGb = (Number(usb.free_mb || 0) / 1024).toFixed(1);
+        cards.push(sysMeterHtml(
+          "USB Gắn ngoài",
+          `${usedGb} / ${totalGb} GB (${usbPct}%)`,
+          `Còn trống: ${freeGb} GB (${usb.mount_dir || "/mnt/usb"})`,
+          usbPct
+        ));
+      } else if (usb.mounted && usb.readonly) {
+        cards.push(sysMeterHtml("USB Gắn ngoài", "Khóa chỉ đọc (RO)", "Đang dự phòng eMMC — chạy fsck để mở lại", null));
+      } else {
+        cards.push(sysMeterHtml("USB Gắn ngoài", "Chưa gắn / Dự phòng", "Đang dùng bộ nhớ trong", null));
+      }
+
+      $("ovSystemGrid").innerHTML = cards.join("");
+    }
+
+    let _jbRenderedAtMs = Date.now();
+    let _jbSessionRemainBase = 0;
+
+    function fmtMMSS(sec) {
+      const s = Math.max(0, Math.floor(Number(sec || 0)));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const rem = s % 60;
+      const mm = String(m).padStart(2, "0");
+      const ss = String(rem).padStart(2, "0");
+      return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+    }
+
+    function renderJukebox() {
+      const ov = state.overview || {};
+      const jb = ov.jukebox || {};
+      const esp = jb.esp32 || {};
+      const dht = jb.dht11 || ov.dht11;
+      _jbRenderedAtMs = Date.now();
+
+      $("jbEspBadge").className = `badge ${esp.online ? "b-ok" : "b-warn"}`;
+      $("jbEspBadge").textContent = esp.online
+        ? `ESP32: Online (${esp.ip || "LAN"}${esp.rssi != null ? ` • ${esp.rssi}dBm` : ""})`
+        : "ESP32: Offline / Chờ kết nối";
+
+      if (dht && dht.temperature_c != null && dht.humidity_pct != null) {
+        $("jbDhtBadge").className = "badge b-info";
+        $("jbDhtBadge").textContent = `🌡️ ${dht.temperature_c}°C • 💧 ${dht.humidity_pct}%`;
+      } else {
+        $("jbDhtBadge").className = "badge b-warn";
+        $("jbDhtBadge").textContent = "🌡️ Chưa có dữ liệu DHT11";
+      }
+
+      const ring = jb.alarm_ringing;
+      if (ring) {
+        $("jbAlarmRingingBanner").classList.remove("hidden");
+        $("jbAlarmRingingText").textContent = `⏰ ${ring.label || "Báo thức đang reo"}`;
+      } else {
+        $("jbAlarmRingingBanner").classList.add("hidden");
+      }
+
+      const sess = jb.timed_session;
+      if (sess && Number(sess.remaining_sec || 0) > 0) {
+        _jbSessionRemainBase = Number(sess.remaining_sec || 0);
+        const modeIcons = { focus: "🎯", chill: "🌿", nap: "😴" };
+        $("jbSessionBanner").classList.remove("hidden");
+        $("jbSessionTitle").textContent = `${modeIcons[sess.mode] || "⏱️"} ${sess.label || sess.mode}`;
+        $("jbSessionCountdown").textContent = fmtMMSS(_jbSessionRemainBase);
+        $("jbSessionQuietBadge").classList.toggle("hidden", !sess.silence_proactive);
+      } else {
+        _jbSessionRemainBase = 0;
+        $("jbSessionBanner").classList.add("hidden");
+      }
+
+      const alarms = jb.alarms || [];
+      $("jbAlarmList").innerHTML = alarms.length
+        ? alarms.map((a) => {
+          const isMusic = a.kind === "music";
+          const icon = isMusic ? "🎵" : "⏰";
+          const durMin = Number(a.duration_min || 0);
+          const durTxt = durMin > 0 ? ` • phát ${durMin}p` : "";
+          const desc = isMusic ? (a.query || a.label || "Nhạc hẹn giờ") : (a.label || "Báo thức");
+          return `
+          <div class="row between" style="font-size:0.8rem; margin-top:4px;">
+            <span>${icon} <strong>${esc(a.time_vn || "")}</strong> • ${esc(desc)}${durTxt} <span class="muted">(còn ${Math.max(1, Math.ceil(Number(a.remaining_sec || 0) / 60))}p)</span></span>
+            <button type="button" class="btn-sm btn-danger" data-alarm-id="${esc(a.id)}" onclick="jukeboxSession('cancel_alarm', {alarm_id: this.dataset.alarmId})">Hủy</button>
+          </div>`;
+        }).join("")
+        : "";
+
+      const cur = jb.current_track;
+      const stMap = {
+        playing: "▶️ Đang phát",
+        paused: "⏸️ Tạm dừng",
+        loading: "⏳ Đang tải nhạc...",
+        stopped: "⏹️ Đang nghỉ",
+      };
+      const stText = stMap[jb.status] || jb.status || "stopped";
+      const sleepSec = Number(jb.sleep_timer_remain_sec || 0);
+      const sleepTag = sleepSec > 0 ? ` <span class="badge b-pink">🌙 Tắt sau ${Math.ceil(sleepSec / 60)}p</span>` : "";
+      const duckTag = jb.ducking_voice ? ` <span class="badge b-ok">🎙️ Trợ lý đang nói (Duck 20%)</span>` : "";
+
+      if (cur) {
+        $("jbNowPlayingBox").innerHTML = `
+          <div class="row between"><strong>${esc(cur.title)}</strong><span class="badge b-info">${esc(stText)}</span></div>
+          <div class="muted">${esc(cur.uploader || "Nhạc Cache USB")}${sleepTag}${duckTag}</div>
+        `;
+      } else if (jb.status === "loading" && jb.loading_query) {
+        $("jbNowPlayingBox").innerHTML = `
+          <div><strong>⏳ Đang tìm &amp; tải:</strong> ${esc(jb.loading_query)}</div>
+          <div class="muted">Đang xử lý nguồn nhạc về USB, xong sẽ tự phát ngay...</div>
+        `;
+      } else {
+        $("jbNowPlayingBox").innerHTML = `
+          <div class="row between"><span class="muted">Chưa phát nhạc.</span><span class="badge b-warn">${esc(stText)}</span></div>
+        `;
+      }
+
+      const dlErr = jb.last_download_error || {};
+      const notice = jb.last_download_notice || "";
+      const errText = jb.last_error || dlErr.message || "";
+      if (errText) {
+        $("jbNoticeBox").classList.remove("hidden");
+        $("jbNoticeBox").style.borderColor = "var(--danger)";
+        $("jbNoticeBox").innerHTML = `<span style="color:var(--danger);">⚠️ ${esc(errText)}</span>`;
+      } else if (notice) {
+        $("jbNoticeBox").classList.remove("hidden");
+        $("jbNoticeBox").style.borderColor = "var(--info)";
+        $("jbNoticeBox").innerHTML = `<span class="muted">ℹ️ ${esc(notice)}</span>`;
+      } else {
+        $("jbNoticeBox").classList.add("hidden");
+      }
+
+      const vol = Number(jb.volume ?? 12);
+      if (document.activeElement !== $("jbVolSlider")) $("jbVolSlider").value = vol;
+      $("jbVolVal").textContent = `${vol}%`;
+      $("chkJbAutoDj").checked = jb.auto_dj !== false;
+      $("chkJbVoiceAutoplay").checked = Boolean(jb.voice_autoplay);
+
+      const eq = jb.eq || {};
+      const activePreset = eq.enabled === false ? "off" : (eq.preset || "loudness");
+      $("jbEqActiveTag").textContent = eq.label || activePreset;
+      $("jbEqActiveTag").className = `badge ${eq.enabled === false ? "b-warn" : "b-ok"}`;
+      document.querySelectorAll(".jb-eq-preset").forEach((btn) => {
+        btn.classList.toggle("btn-pink", btn.dataset.preset === activePreset);
+      });
+      const bDb = Number(eq.bass_db ?? 4.0);
+      const tDb = Number(eq.treble_db ?? 3.5);
+      const hpHz = Number(eq.highpass_hz ?? 60);
+      if (document.activeElement !== $("jbEqBass")) $("jbEqBass").value = bDb;
+      if (document.activeElement !== $("jbEqTreble")) $("jbEqTreble").value = tDb;
+      if (document.activeElement !== $("jbEqHp")) $("jbEqHp").value = hpHz;
+      $("jbEqBassVal").textContent = `${bDb >= 0 ? "+" : ""}${bDb.toFixed(1)} dB`;
+      $("jbEqTrebleVal").textContent = `${tDb >= 0 ? "+" : ""}${tDb.toFixed(1)} dB`;
+      $("jbEqHpVal").textContent = `${Math.round(hpHz)} Hz`;
+
+      const norm = jb.normalize || {};
+      const normOn = eq.normalize !== undefined ? Boolean(eq.normalize) : (norm.enabled !== false);
+      $("chkJbNorm").checked = normOn;
+      if (!normOn) {
+        $("jbNormBadge").className = "badge b-warn";
+        $("jbNormBadge").textContent = "Tắt";
+      } else {
+        const effDb = Number(norm.effective_db ?? 0);
+        const sign = effDb >= 0 ? "+" : "";
+        $("jbNormBadge").className = "badge b-ok";
+        $("jbNormBadge").textContent = norm.has_track_gain
+          ? `${sign}${effDb.toFixed(1)} dB`
+          : "Chưa đo (0.0 dB)";
+      }
+
+      const ck = jb.cookies || {};
+      $("jbCookiesBadge").className = `badge ${ck.configured ? "b-ok" : "b-warn"}`;
+      $("jbCookiesBadge").textContent = ck.configured
+        ? `Đã nạp (${ck.cookie_count || 0} dòng)`
+        : "Chưa nạp";
+
+      const cache = jb.cache || {};
+      const tracks = cache.tracks || [];
+      const usedMb = ((cache.total_bytes || 0) / (1024 * 1024)).toFixed(1);
+      const maxMb = ((cache.max_bytes || (150 * 1024 * 1024)) / (1024 * 1024)).toFixed(0);
+      $("jbCacheUsage").textContent = `${tracks.length} bài • ${usedMb} / ${maxMb} MB`;
+
+      $("jukeboxCacheList").innerHTML = tracks.length
+        ? tracks.map((t) => `
+          <div class="item-card">
+            <div class="row between">
+              <div style="min-width:0; flex:1;">
+                <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"><strong>${esc(t.title)}</strong></div>
+                <div class="muted">${(Number(t.size_bytes || 0) / (1024 * 1024)).toFixed(1)} MB${t.uploader ? ` • ${esc(t.uploader)}` : ""}</div>
+              </div>
+              <div class="row">
+                <button type="button" class="btn-sm btn-blue" data-vid="${esc(t.video_id)}" onclick="jukeboxPlayCached(this.dataset.vid)">Phát</button>
+                <button type="button" class="btn-sm btn-danger" data-vid="${esc(t.video_id)}" onclick="jukeboxCtrl('delete_cache', this.dataset.vid)">Xóa</button>
+              </div>
+            </div>
+          </div>`).join("")
+        : `<div class="muted">Kho nhạc đang để trống — nhập tên bài hoặc link YouTube/SoundCloud bên trái để tải &amp; phát nhé!</div>`;
+    }
+
+    async function loadOverview() {
+      state.overview = await api("/api/overview");
+      renderOverview();
+      syncProfileForm(state.overview.profile);
+      syncPersonaForm(state.overview.persona);
+      syncSettingsForm(state.overview.settings);
+    }
+
+    async function loadMemories() {
+      const q = encodeURIComponent($("memSearch").value.trim());
+      const cat = encodeURIComponent($("memCatFilter").value);
+      const data = await api(`/api/memories?search=${q}&category=${cat}&limit=${state.memLimit}&offset=${state.memOffset}`);
+      state.memItems = data.items || [];
+      $("memTotalCount").textContent = data.total;
+      const start = data.total ? state.memOffset + 1 : 0;
+      const end = Math.min(state.memOffset + state.memLimit, data.total);
+      $("memPageInfo").textContent = `${start}–${end} / ${data.total}`;
+      $("btnMemPrev").disabled = state.memOffset <= 0;
+      $("btnMemNext").disabled = (state.memOffset + state.memLimit) >= data.total;
+
+      $("memList").innerHTML = data.items.length
+        ? data.items.map((m) => `
+          <div class="item-card" data-id="${m.id}">
+            <div class="row between">
+              <div class="row">
+                <span class="badge b-info">${esc(m.category)}</span>
+                <span class="badge b-warn">Imp ${m.importance}</span>
+                <span class="badge ${m.has_embedding ? "b-ok" : "b-err"}">${m.has_embedding ? "✓ Vector" : "No Vec"}</span>
+                <span class="muted">#${m.id} • ${fmtTs(m.updated_at || m.created_at)}</span>
+              </div>
+              <div class="row">
+                <button class="btn-sm" onclick="editMemoryById(${m.id})">Sửa</button>
+                <button class="btn-sm btn-danger" onclick="delMemory(${m.id})">Xóa</button>
+              </div>
+            </div>
+            <div style="margin-top:6px;">${esc(m.fact)}</div>
+          </div>`).join("")
+        : `<div class="muted">Không tìm thấy ký ức phù hợp.</div>`;
+    }
+
+    window.editMemoryById = (id) => {
+      // Tra cứu từ dữ liệu đã tải thay vì nhét chuỗi vào onclick (tránh stored XSS)
+      const m = (state.memItems || []).find((x) => Number(x.id) === Number(id));
+      if (!m) return;
+      return window.editMemory(m.id, m.fact, m.category, m.importance);
+    };
+
+    window.editMemory = async (id, oldFact, oldCat, oldImp) => {
+      const nextFact = prompt("Chỉnh nội dung ký ức:", oldFact);
+      if (nextFact === null || nextFact.trim().length < 3) return;
+      const nextImp = prompt("Độ quan trọng (1-3):", String(oldImp || 2));
+      try {
+        await api(`/api/memories/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ fact: nextFact.trim(), category: oldCat, importance: Number(nextImp || oldImp) }),
+        });
+        showToast("Đã cập nhật ký ức", `#${id} đã lưu & tạo lại vector.`);
+        loadMemories();
+      } catch (e) { showToast("Lỗi sửa ký ức", e.message, "error"); }
+    };
+
+    window.delMemory = async (id) => {
+      if (!confirm(`Xóa vĩnh viễn ký ức #${id}?`)) return;
+      try {
+        await api(`/api/memories/${id}`, { method: "DELETE" });
+        showToast("Đã xóa & đưa vào Sổ từ chối", `#${id} (AI sẽ không tự ghi lại ý này)`);
+        loadMemories();
+      } catch (e) { showToast("Lỗi xóa ký ức", e.message, "error"); }
+    };
+
+    function syncPersonaForm(ps) {
+      if (!ps) return;
+      if ($("inpButlerName")) $("inpButlerName").value = ps.butler_name || "Smart Butler";
+      if ($("inpOwnerName")) $("inpOwnerName").value = ps.owner_name || "Chủ nhà";
+      if ($("inpButlerStyle")) $("inpButlerStyle").value = ps.style || "butler";
+      if ($("inpWeatherCity")) $("inpWeatherCity").value = ps.weather_city || "Ho Chi Minh";
+      if ($("inpCustomNotes")) $("inpCustomNotes").value = ps.custom_notes || "";
+      if ($("hdrBrandTitle")) $("hdrBrandTitle").textContent = `🏠 ${ps.butler_name || "Smart Butler"} • Home Hub`;
+    }
+
+    function syncProfileForm(p) {
+      if (!p) return;
+      $("inpAffinity").value = p.affinity_score ?? 80;
+      $("valAffinity").textContent = $("inpAffinity").value;
+      $("inpMood").value = p.mood ?? "sẵn sàng";
+      $("inpTease").value = p.tease_level ?? 58;
+      $("valTease").textContent = $("inpTease").value;
+      $("inpStubborn").value = p.stubborn_level ?? 48;
+      $("valStubborn").textContent = $("inpStubborn").value;
+      $("inpClingy").value = p.clingy_level ?? 62;
+      $("valClingy").textContent = $("inpClingy").value;
+      $("valUnanswered").textContent = p.unanswered_proactive_count ?? 0;
+      $("chkResetUnanswered").checked = false;
+    }
+
+    async function loadReminders() {
+      const items = await api("/api/reminders?status=all");
+      $("remList").innerHTML = items.length
+        ? items.map((r) => `
+          <div class="item-card">
+            <div class="row between">
+              <div class="row">
+                <span class="badge ${r.status === "pending" ? "b-warn" : r.status === "sent" ? "b-ok" : "b-err"}">${esc(r.status)}</span>
+                <span class="badge b-info">${esc(r.kind)}</span>
+                <span class="muted">${fmtTs(r.due_at)}</span>
+              </div>
+              <div class="row">
+                ${r.status === "pending" ? `<button class="btn-sm" onclick="cancelRem(${r.id})">Hủy</button>` : ""}
+                <button class="btn-sm btn-danger" onclick="delRem(${r.id})">Xóa</button>
+              </div>
+            </div>
+            <div style="margin-top:5px;"><strong>${esc(r.title)}</strong></div>
+          </div>`).join("")
+        : `<div class="muted">Chưa có lịch hẹn nào.</div>`;
+    }
+
+    window.cancelRem = async (id) => {
+      try { await api(`/api/reminders/${id}/cancel`, { method: "POST" }); loadReminders(); }
+      catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+    window.delRem = async (id) => {
+      try { await api(`/api/reminders/${id}`, { method: "DELETE" }); loadReminders(); }
+      catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+
+    async function loadChats() {
+      const q = encodeURIComponent($("chatSearch").value.trim());
+      const data = await api(`/api/chats?search=${q}&limit=${state.chatLimit}&offset=${state.chatOffset}`);
+      $("chatTotalCount").textContent = data.total;
+      const start = data.total ? state.chatOffset + 1 : 0;
+      const end = Math.min(state.chatOffset + state.chatLimit, data.total);
+      $("chatPageInfo").textContent = `${start}–${end} / ${data.total}`;
+      $("btnChatPrev").disabled = state.chatOffset <= 0;
+      $("btnChatNext").disabled = (state.chatOffset + state.chatLimit) >= data.total;
+
+      const ps = state.overview?.persona || {};
+      const ownerLbl = esc(ps.owner_name || "Chủ nhà");
+      const butlerLbl = esc(ps.butler_name || "Trợ lý");
+      $("chatList").innerHTML = data.items.length
+        ? data.items.map((c) => `
+          <div class="item-card ${c.role === "user" ? "chat-user" : "chat-model"}">
+            <div class="row between muted">
+              <span>${c.role === "user" ? `👤 ${ownerLbl}` : `🤖 ${butlerLbl}`} ${c.delta_affinity ? `(Δ ${c.delta_affinity > 0 ? "+" : ""}${c.delta_affinity})` : ""}</span>
+              <span>${fmtTs(c.created_at)}</span>
+            </div>
+            <div style="margin-top:4px; white-space:pre-wrap;">${esc(c.content)}</div>
+          </div>`).join("")
+        : `<div class="muted">Không có lịch sử chat.</div>`;
+    }
+
+    function syncSettingsForm(all) {
+      if (!all) return;
+      const lan = all.lan || {};
+      const wd = all.watchdog || {};
+      const bkp = all.backup || {};
+      $("setPhoneMac").value = lan.phone_mac || "";
+      $("setPcMac").value = lan.pc_mac || "";
+      $("setMusicDlUrl").value = lan.music_dl_url || "";
+      $("setAwayGrace").value = lan.away_grace_mins ?? 8;
+      $("setQuietStart").value = lan.quiet_start_hour ?? 0;
+      $("setQuietEnd").value = lan.quiet_end_hour ?? 7;
+      $("setPresenceEn").checked = lan.presence_enabled !== false;
+      $("setNotifySound").checked = lan.notify_sound_enabled !== false;
+      $("setNotifyTts").checked = lan.notify_tts_enabled !== false;
+
+      $("setWdHeal").checked = wd.auto_heal !== false;
+      $("setWdDns").checked = wd.auto_dns_fallback !== false;
+      $("setWdTg").checked = wd.notify_telegram_on_recovery !== false;
+
+      $("setBkpTg").checked = bkp.daily_telegram_enabled !== false;
+      $("setBkpHour").value = bkp.daily_hour ?? 3;
+      $("setBkpKeep").value = bkp.keep_max ?? 7;
+    }
+
+    async function scanLan() {
+      $("btnLanScan").disabled = true;
+      $("btnLanScan").textContent = "Đang quét...";
+      try {
+        const res = await api("/api/lan/scan", { method: "POST" });
+        const devs = res.devices || [];
+        $("lanDevicesBody").innerHTML = devs.length
+          ? devs.map((d) => `
+            <tr>
+              <td class="mono">${esc(d.ip)}${d.is_current_client ? `<br><span class="badge b-pink">Thiết bị này</span>` : ""}</td>
+              <td class="mono">${esc(d.mac)}<br><span class="muted">${esc(d.state)}</span></td>
+              <td>${esc(d.hostname || "—")} ${d.is_phone ? '<span class="badge b-info">Phone</span>' : ""} ${d.is_pc ? '<span class="badge b-ok">PC</span>' : ""}</td>
+              <td>
+                <div class="row">
+                  <button class="btn-sm" data-mac="${esc(d.mac)}" onclick="bindMac('phone_mac', this.dataset.mac)">Đặt Phone</button>
+                  <button class="btn-sm btn-blue" data-mac="${esc(d.mac)}" onclick="bindMac('pc_mac', this.dataset.mac)">Đặt PC</button>
+                  <button class="btn-sm btn-pink" data-mac="${esc(d.mac)}" onclick="bindMac('fan_mac', this.dataset.mac)">Đặt Quạt</button>
+                </div>
+              </td>
+            </tr>`).join("")
+          : `<tr><td colspan="4" class="muted">Không thấy thiết bị ARP nào.</td></tr>`;
+      } catch (e) {
+        showToast("Lỗi quét LAN", e.message, "error");
+      } finally {
+        $("btnLanScan").disabled = false;
+        $("btnLanScan").textContent = "Quét LAN ngay";
+      }
+    }
+
+    window.bindMac = async (field, mac) => {
+      try {
+        const data = await api("/api/settings", { method: "PATCH", body: JSON.stringify({ [field]: mac }) });
+        syncSettingsForm(data.settings);
+        if (state.overview) {
+          state.overview.presence = data.presence;
+          if (data.fan) state.overview.fan = data.fan;
+          state.overview.settings = data.settings;
+          renderOverview();
+          syncFanForm(data.settings?.fan);
+        }
+        const labelMap = { phone_mac: "Điện thoại", pc_mac: "PC", fan_mac: "Quạt BLDC" };
+        showToast("Đã gán MAC", `${labelMap[field] || field} -> ${mac}`);
+        scanLan();
+      } catch (e) { showToast("Lỗi gán MAC", e.message, "error"); }
+    };
+
+    async function loadBackupsAndWatchdog() {
+      const [bkpData, wdData] = await Promise.all([api("/api/backups"), api("/api/watchdog/events?limit=60")]);
+      const items = bkpData.items || [];
+      $("bkpList").innerHTML = items.length
+        ? items.map((b) => `
+          <div class="item-card">
+            <div class="row between">
+              <div>
+                <div class="mono"><strong>${esc(b.filename)}</strong></div>
+                <div class="muted">${(b.size_bytes/1024).toFixed(1)} KB • ${fmtTs(b.created_at)}</div>
+              </div>
+              <div class="row">
+                <a href="/api/backups/${encodeURIComponent(b.filename)}/download"><button type="button" class="btn-sm">Tải .db</button></a>
+                <button class="btn-sm btn-danger" data-filename="${esc(b.filename)}" onclick="restoreSnapshot(this.dataset.filename)">Khôi phục</button>
+              </div>
+            </div>
+          </div>`).join("")
+        : `<div class="muted">Chưa có bản sao lưu nào.</div>`;
+
+      const evs = wdData.events || [];
+      $("wdEventsList").innerHTML = evs.length
+        ? evs.map((ev) => `
+          <div class="item-card">
+            <div class="row between">
+              <span class="badge ${ev.level === "warning" ? "b-warn" : ev.level === "error" ? "b-err" : "b-info"}">${esc(ev.event_type)}</span>
+              <span class="muted">${fmtTs(ev.created_at)}</span>
+            </div>
+            <div style="margin-top:4px;"><strong>${esc(ev.title)}</strong></div>
+            ${ev.detail ? `<div class="muted">${esc(ev.detail)}</div>` : ""}
+          </div>`).join("")
+        : `<div class="muted">Chưa có nhật ký sự cố nào.</div>`;
+    }
+
+    window.restoreSnapshot = async (filename) => {
+      if (!confirm(`Khôi phục toàn bộ DB từ "${filename}"? Hệ thống sẽ tự tạo bản dự phòng pre_restore trước khi ghi đè.`)) return;
+      try {
+        const res = await api("/api/backups/restore", { method: "POST", body: JSON.stringify({ filename }) });
+        showToast("Khôi phục DB thành công", `Bản dự phòng cũ: ${res.pre_restore_backup}`);
+        await Promise.all([loadOverview(), loadBackupsAndWatchdog()]);
+      } catch (e) { showToast("Khôi phục lỗi", e.message, "error"); }
+    };
+
+    function showLogin() {
+      if (state.sse) { state.sse.close(); state.sse = null; }
+      $("appView").classList.add("hidden");
+      $("loginView").classList.remove("hidden");
+      $("pinInput").focus();
+    }
+
+    async function showApp() {
+      $("loginView").classList.add("hidden");
+      $("appView").classList.remove("hidden");
+      connectSSE();
+      await loadOverview();
+    }
+
+    // Event bindings
+    $("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("loginErr").textContent = "";
+      try {
+        await api("/api/login", { method: "POST", body: JSON.stringify({ pin: $("pinInput").value }) });
+        $("pinInput").value = "";
+        await showApp();
+      } catch (err) {
+        $("loginErr").textContent = err.message;
+      }
+    });
+
+    $("btnLogout").addEventListener("click", async () => {
+      await api("/api/logout", { method: "POST" }).catch(() => {});
+      showLogin();
+    });
+
+    $("btnAudioEnable").addEventListener("click", async () => {
+      state.audioUnlocked = true;
+      playChime();
+      if ("Notification" in window && Notification.permission === "default") {
+        await Notification.requestPermission().catch(() => {});
+      }
+      $("btnAudioEnable").textContent = "🔔 Đã bật chuông Web";
+      $("btnAudioEnable").className = "btn-sm btn-blue";
+    });
+
+    $("btnRefreshAll").addEventListener("click", () => loadOverview().catch((e) => showToast("Lỗi", e.message, "error")));
+
+    document.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const target = btn.dataset.tab;
+        document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${target}`));
+        if (target === "overview") loadOverview();
+        if (target === "memories") loadMemories();
+        if (target === "journal") loadJournal();
+        if (target === "engine") loadEngine();
+        if (target === "profile") {
+          Promise.all([api("/api/profile").then(syncProfileForm), api("/api/persona").then(syncPersonaForm)]);
+        }
+        if (target === "chats") Promise.all([loadReminders(), loadChats()]);
+        if (target === "backups") loadBackupsAndWatchdog();
+      });
+    });
+
+    async function loadJournal() {
+      const data = await api("/api/journal?days=14");
+      const days = data.days || [];
+      $("journalList").innerHTML = days.length
+        ? days.map((d) => {
+            const memHtml = (d.memories || []).slice(0, 6).map((m) =>
+              `<li><span class="badge b-info">${esc(m.category)}</span> <span class="muted">${esc(m.time_vn)}</span> ${esc(m.fact)}</li>`
+            ).join("");
+            const photoTags = (d.photos || []).map((p) =>
+              `<span class="badge b-pink">${esc(p.photo_key)} (${esc(p.time_vn)})</span>`
+            ).join(" ");
+            return `
+              <div class="item-card">
+                <div class="row between">
+                  <strong>📅 ${esc(d.date)} ${d.weekday_vi ? `(${esc(d.weekday_vi)})` : ""}</strong>
+                  <div class="row">
+                    <span class="badge b-ok">${d.chat_count || 0} tin nhắn</span>
+                    <span class="badge b-info">${(d.memories || []).length} ký ức</span>
+                    <span class="badge b-pink">${(d.photos || []).length} ảnh</span>
+                  </div>
+                </div>
+                ${d.daily_diary ? `<pre style="white-space:pre-wrap; font-family:inherit; margin:8px 0 0; font-size:0.86rem; color:var(--text);">${esc(d.daily_diary)}</pre>` : ""}
+                ${photoTags ? `<div class="row" style="margin-top:8px;">${photoTags}</div>` : ""}
+                ${memHtml ? `<ul style="margin:8px 0 0 18px; padding:0; font-size:0.84rem;">${memHtml}</ul>` : ""}
+              </div>`;
+          }).join("")
+        : `<div class="muted">Chưa có dữ liệu nhật ký gần đây.</div>`;
+    }
+
+    async function loadEngine() {
+      const eng = await api("/api/engine");
+      const c = eng.circadian || {};
+      const j = eng.jiwen || {};
+      const lot = eng.lottery || {};
+      $("engCircadianBox").innerHTML = `
+        <div class="row">
+          <span class="badge b-pink">${esc(c.label_vi || c.phase)} (${esc(c.time_str)})</span>
+          <span class="badge b-info">Drive: ${(Number(j.drive_score || 0) * 100).toFixed(0)}%</span>
+          <span class="badge b-ok">Hôm nay: ${eng.sent_today || 0}/${eng.daily_cap || 6} lượt</span>
+          <span class="badge b-warn">Wake-Lottery: ${lot.used_count || 0}/${lot.daily_limit || 2}</span>
+        </div>
+        <div class="muted" style="margin-top:6px;">${esc(c.hint_vi || "")} • Lượt trước: <span class="mono">${esc(j.last_turn_type || "neutral")}</span></div>
+      `;
+
+      const axes = [
+        ["Kết nối (Connection)", j.connection],
+        ["Giá / Tự trọng (Pride)", j.pride],
+        ["Sắc thái (Valence)", j.valence],
+        ["Hứng khởi (Arousal)", j.arousal],
+        ["Bận tâm riêng (Immersion)", j.immersion],
+      ];
+      $("engJiwenBars").innerHTML = axes.map(([label, val]) => {
+        const pct = Math.max(0, Math.min(100, Math.round(Number(val || 0) * 100)));
+        return `<div style="margin-bottom:6px;">
+          <div class="row between"><span class="muted">${esc(label)}</span><span class="mono">${pct}%</span></div>
+          <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      }).join("");
+
+      const np = eng.now_playing;
+      $("engNowPlayingBox").innerHTML = np && np.active
+        ? `<div class="row between"><strong>🎵 ${esc(np.title)}</strong><span class="badge b-ok">${esc(np.app_name || "Windows Media")}</span></div>
+           <div class="muted">${esc(np.artist || "Không rõ nghệ sĩ")}${np.album ? ` • ${esc(np.album)}` : ""} • Cập nhật ${fmtTs(np.updated_at)}</div>`
+        : `<div class="muted">PC chưa báo bài nhạc nào đang phát (hoặc đang tạm dừng). Dùng <span class="mono">tools/pc_media_bridge.py</span> trên Windows để đồng bộ.</div>`;
+
+      const loops = eng.open_loops || [];
+      $("engOpenLoopsList").innerHTML = loops.length
+        ? loops.map((l) => `
+          <div class="item-card">
+            <div class="row between">
+              <strong>🧵 ${esc(l.topic)}</strong>
+              <button class="btn-sm" data-loop-id="${esc(l.id)}" onclick="resolveLoop(this.dataset.loopId)">✓ Đã xong</button>
+            </div>
+            <div class="muted">${esc(l.note || "")}</div>
+          </div>`).join("")
+        : `<div class="muted">Chưa có mạch chuyện nào đang bỏ ngỏ.</div>`;
+
+      const decs = eng.decisions || [];
+      $("engDecisionsList").innerHTML = decs.length
+        ? decs.map((d) => {
+            const cls = d.decision === "sent" ? "b-ok" : (d.decision === "pre_rejected" ? "b-warn" : "b-info");
+            return `<div class="item-card">
+              <div class="row between">
+                <div class="row">
+                  <span class="badge ${cls}">${esc(d.decision)}</span>
+                  ${d.category ? `<span class="badge">${esc(d.category)}</span>` : ""}
+                  <span class="mono muted">drive=${Number(d.score || 0).toFixed(2)}</span>
+                </div>
+                <span class="muted">${fmtTs(d.created_at)}</span>
+              </div>
+              <div class="muted" style="margin-top:4px;">${esc(d.reason || "—")}</div>
+            </div>`;
+          }).join("")
+        : `<div class="muted">Chưa có log ProactiveArbiter.</div>`;
+
+      const rejs = eng.rejected_memories || [];
+      $("engRejectedList").innerHTML = rejs.length
+        ? rejs.map((r) => `
+          <div class="item-card">
+            <div class="row between">
+              <span class="muted">${esc(r.source)} • ${fmtTs(r.created_at)}</span>
+              <button class="btn-sm" onclick="unrejectMem(${r.id})">Gỡ chặn</button>
+            </div>
+            <div style="margin-top:4px;">${esc(r.raw_fact)}</div>
+          </div>`).join("")
+        : `<div class="muted">Sổ từ chối đang trống.</div>`;
+    }
+
+    window.resolveLoop = async (loopId) => {
+      try {
+        await api(`/api/engine/open_loops/${encodeURIComponent(loopId)}/resolve`, { method: "POST" });
+        showToast("Đã đóng mạch chuyện", "Sẽ không nhắc lại chủ đề này nữa.");
+        loadEngine();
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+
+    window.unrejectMem = async (rejId) => {
+      try {
+        await api(`/api/engine/rejected/${rejId}`, { method: "DELETE" });
+        showToast("Đã gỡ chặn", "Ký ức này có thể được ghi lại nếu nhắc tới.");
+        loadEngine();
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+
+    $("btnJournalRefresh").addEventListener("click", () => loadJournal().catch((e) => showToast("Lỗi", e.message, "error")));
+    $("btnEngineRefresh").addEventListener("click", () => loadEngine().catch((e) => showToast("Lỗi", e.message, "error")));
+
+    $("btnTestNotify").addEventListener("click", async () => {
+      state.audioUnlocked = true;
+      try {
+        await api("/api/notify/test", { method: "POST", body: JSON.stringify({ speak_tts: $("chkTestSpeak").checked }) });
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    });
+
+    $("ttsAuditionIntensity")?.addEventListener("input", (e) => {
+      const v = Number(e.target?.value || 1.0);
+      if ($("ttsAuditionIntensityVal")) $("ttsAuditionIntensityVal").textContent = `${v.toFixed(2)}x`;
+    });
+
+    document.querySelectorAll(".tts-cue-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const inp = $("ttsAuditionText");
+        if (!inp) return;
+        const cue = btn.getAttribute("data-cue") || "";
+        const pos = inp.selectionStart ?? inp.value.length;
+        inp.value = inp.value.slice(0, pos) + cue + inp.value.slice(pos);
+        inp.focus();
+      });
+    });
+
+    $("btnTtsAuditionBrowser")?.addEventListener("click", async () => {
+      state.audioUnlocked = true;
+      const txt = ($("ttsAuditionText")?.value || "").trim();
+      if (!txt) { showToast("Thiếu nội dung", "Hãy nhập câu thoại muốn nghe thử.", "warning"); return; }
+      const params = new URLSearchParams({ text: txt });
+      const mood = $("ttsAuditionMood")?.value || "";
+      const tod = $("ttsAuditionTod")?.value || "";
+      const intensity = Number($("ttsAuditionIntensity")?.value || 1.0);
+      if (mood) params.set("mood", mood);
+      if (tod) params.set("time_of_day", tod);
+      params.set("intensity", intensity.toFixed(2));
+      params.set("prosody", $("chkTtsProsody")?.checked ? "1" : "0");
+      if (state._auditionAudio) {
+        try { state._auditionAudio.pause(); } catch (_) {}
+      }
+      $("ttsAuditionStatus").textContent = "Đang tổng hợp giọng...";
+      try {
+        const res = await fetch(`/api/tts/speak_alert?${params.toString()}`, { credentials: "same-origin" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        state._auditionAudio = audio;
+        audio.onended = () => { $("ttsAuditionStatus").textContent = "Sẵn sàng"; URL.revokeObjectURL(url); };
+        audio.onerror = () => { $("ttsAuditionStatus").textContent = "Lỗi phát audio"; URL.revokeObjectURL(url); };
+        $("ttsAuditionStatus").textContent = `Đang phát (${mood || "tự động"} • ${intensity.toFixed(2)}x)`;
+        await audio.play();
+      } catch (e) {
+        $("ttsAuditionStatus").textContent = "Lỗi: " + e.message;
+        showToast("Lỗi nghe thử TTS", e.message, "error");
+      }
+    });
+
+    $("btnTtsAuditionEsp32")?.addEventListener("click", async () => {
+      const txt = ($("ttsAuditionText")?.value || "").trim();
+      if (!txt) { showToast("Thiếu nội dung", "Hãy nhập câu thoại muốn phát ra loa.", "warning"); return; }
+      const mood = $("ttsAuditionMood")?.value || null;
+      const tod = $("ttsAuditionTod")?.value || null;
+      const intensity = Number($("ttsAuditionIntensity")?.value || 1.0);
+      const prosody = Boolean($("chkTtsProsody")?.checked);
+      $("ttsAuditionStatus").textContent = "Đang gửi ra loa ESP32...";
+      try {
+        const d = await api("/api/tts/audition_esp32", {
+          method: "POST",
+          body: JSON.stringify({ text: txt, mood, time_of_day: tod, intensity, prosody }),
+        });
+        const usedInt = Number(d.intensity ?? intensity).toFixed(2);
+        $("ttsAuditionStatus").textContent = `Đã phát ra loa (${d.bytes}B • ${usedInt}x)`;
+        showToast("Đã gửi ra loa ESP32", `Sắc thái: ${d.mood} (${usedInt}x)`, "info");
+      } catch (e) {
+        $("ttsAuditionStatus").textContent = "Sẵn sàng";
+        showToast("Lỗi phát loa ESP32", e.message, "error");
+      }
+    });
+
+    $("btnMemSearch").addEventListener("click", () => { state.memOffset = 0; loadMemories(); });
+    $("memCatFilter").addEventListener("change", () => { state.memOffset = 0; loadMemories(); });
+    $("btnMemPrev").addEventListener("click", () => { state.memOffset = Math.max(0, state.memOffset - state.memLimit); loadMemories(); });
+    $("btnMemNext").addEventListener("click", () => { state.memOffset += state.memLimit; loadMemories(); });
+    $("memAddForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await api("/api/memories", {
+          method: "POST",
+          body: JSON.stringify({
+            fact: $("memNewFact").value.trim(),
+            category: $("memNewCat").value,
+            importance: Number($("memNewImp").value),
+          }),
+        });
+        $("memNewFact").value = "";
+        showToast("Đã thêm ký ức", "Đã lưu vào DB & gắn vector.");
+        loadMemories();
+      } catch (err) { showToast("Lỗi", err.message, "error"); }
+    });
+
+    [["inpAffinity", "valAffinity"], ["inpTease", "valTease"], ["inpStubborn", "valStubborn"], ["inpClingy", "valClingy"]]
+      .forEach(([inp, val]) => $(inp).addEventListener("input", () => $(val).textContent = $(inp).value));
+
+    $("personaForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const updated = await api("/api/persona", {
+          method: "PATCH",
+          body: JSON.stringify({
+            butler_name: $("inpButlerName").value.trim(),
+            owner_name: $("inpOwnerName").value.trim(),
+            style: $("inpButlerStyle").value,
+            weather_city: $("inpWeatherCity").value.trim(),
+            custom_notes: $("inpCustomNotes").value.trim(),
+          }),
+        });
+        if (state.overview) state.overview.persona = updated;
+        syncPersonaForm(updated);
+        showToast("Đã lưu Persona", `${updated.butler_name} (${updated.style_label})`);
+      } catch (err) { showToast("Lỗi lưu Persona", err.message, "error"); }
+    });
+
+    $("profileForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const updated = await api("/api/profile", {
+          method: "PATCH",
+          body: JSON.stringify({
+            affinity_score: Number($("inpAffinity").value),
+            mood: $("inpMood").value.trim(),
+            tease_level: Number($("inpTease").value),
+            stubborn_level: Number($("inpStubborn").value),
+            clingy_level: Number($("inpClingy").value),
+            reset_unanswered: $("chkResetUnanswered").checked,
+          }),
+        });
+        syncProfileForm(updated);
+        showToast("Đã lưu hồ sơ", `Affinity ${updated.affinity_score}/100 • ${updated.mood}`);
+      } catch (err) { showToast("Lỗi", err.message, "error"); }
+    });
+
+    $("remAddForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await api("/api/reminders", {
+          method: "POST",
+          body: JSON.stringify({
+            title: $("remTitle").value.trim(),
+            delay_minutes: Number($("remMins").value || 30),
+            kind: $("remKind").value,
+          }),
+        });
+        $("remTitle").value = "";
+        showToast("Đã tạo lịch hẹn", "Scheduler sẽ nhắc đúng giờ.");
+        loadReminders();
+      } catch (err) { showToast("Lỗi", err.message, "error"); }
+    });
+
+    $("btnChatSearch").addEventListener("click", () => { state.chatOffset = 0; loadChats(); });
+    $("btnChatPrev").addEventListener("click", () => { state.chatOffset = Math.max(0, state.chatOffset - state.chatLimit); loadChats(); });
+    $("btnChatNext").addEventListener("click", () => { state.chatOffset += state.chatLimit; loadChats(); });
+
+    $("btnLanScan").addEventListener("click", scanLan);
+    $("settingsForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const res = await api("/api/settings", {
+          method: "PATCH",
+          body: JSON.stringify({
+            lan: {
+              phone_mac: $("setPhoneMac").value.trim(),
+              pc_mac: $("setPcMac").value.trim(),
+              music_dl_url: $("setMusicDlUrl").value.trim(),
+              away_grace_mins: Number($("setAwayGrace").value || 8),
+              quiet_start_hour: Number($("setQuietStart").value || 0),
+              quiet_end_hour: Number($("setQuietEnd").value || 7),
+              presence_enabled: $("setPresenceEn").checked,
+              notify_sound_enabled: $("setNotifySound").checked,
+              notify_tts_enabled: $("setNotifyTts").checked,
+            },
+            watchdog: {
+              auto_heal: $("setWdHeal").checked,
+              auto_dns_fallback: $("setWdDns").checked,
+              notify_telegram_on_recovery: $("setWdTg").checked,
+            },
+            backup: {
+              daily_telegram_enabled: $("setBkpTg").checked,
+              daily_hour: Number($("setBkpHour").value || 3),
+              keep_max: Number($("setBkpKeep").value || 7),
+            },
+          }),
+        });
+        syncSettingsForm(res.settings);
+        if (state.overview) { state.overview.presence = res.presence; state.overview.settings = res.settings; renderOverview(); }
+        showToast("Đã lưu cấu hình", "Mọi thiết lập mới đã có hiệu lực.");
+      } catch (err) { showToast("Lỗi lưu cấu hình", err.message, "error"); }
+    });
+
+    $("btnBkpCreate").addEventListener("click", async () => {
+      try {
+        const info = await api("/api/backups/create", { method: "POST" });
+        showToast("Đã tạo Snapshot", `${info.filename} (${(info.size_bytes/1024).toFixed(1)} KB)`);
+        loadBackupsAndWatchdog();
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    });
+
+    $("btnBkpTg").addEventListener("click", async () => {
+      $("btnBkpTg").disabled = true;
+      try {
+        await api("/api/backups/telegram", { method: "POST" });
+        showToast("Đã gửi lên Telegram", "Kiểm tra chat Telegram để thấy file .db.");
+        loadBackupsAndWatchdog();
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+      finally { $("btnBkpTg").disabled = false; }
+    });
+
+    $("restoreUploadForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const file = $("restoreFileInput").files[0];
+      if (!file) return showToast("Chưa chọn file", "Chọn file .db hoặc .db.gz trước.", "warning");
+      if (!confirm(`Khôi phục DB từ file "${file.name}"?`)) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await api("/api/backups/restore", { method: "POST", body: fd });
+        showToast("Khôi phục thành công", `Dự phòng cũ: ${res.pre_restore_backup}`);
+        $("restoreFileInput").value = "";
+        await Promise.all([loadOverview(), loadBackupsAndWatchdog()]);
+      } catch (err) { showToast("Khôi phục thất bại", err.message, "error"); }
+    });
+
+    $("btnWdCheck").addEventListener("click", async () => {
+      $("btnWdCheck").disabled = true;
+      try {
+        const snap = await api("/api/watchdog/check", { method: "POST" });
+        if (state.overview) { state.overview.watchdog = snap; renderOverview(); }
+        loadBackupsAndWatchdog();
+        showToast("Đã kiểm tra mạng", `Trạng thái: ${snap.status}`);
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+      finally { $("btnWdCheck").disabled = false; }
+    });
+
+    window.jukeboxCtrl = async (action, value = null) => {
+      try {
+        const snap = await api("/api/jukebox/control", {
+          method: "POST",
+          body: JSON.stringify({ action, value }),
+        });
+        if (state.overview) {
+          state.overview.jukebox = snap;
+          renderJukebox();
+        }
+      } catch (e) {
+        showToast("Lỗi Jukebox", e.message, "error");
+      }
+    };
+
+    window.jukeboxPlayCached = async (videoId) => {
+      try {
+        const res = await api("/api/jukebox/play", {
+          method: "POST",
+          body: JSON.stringify({ video_id: videoId, play_now: true }),
+        });
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+        }
+      } catch (e) {
+        showToast("Lỗi phát nhạc", e.message, "error");
+      }
+    };
+
+    $("btnJbToggle").addEventListener("click", () => jukeboxCtrl("toggle"));
+    $("btnJbSkip").addEventListener("click", () => jukeboxCtrl("skip"));
+    $("btnJbStop").addEventListener("click", () => jukeboxCtrl("stop"));
+    $("chkJbAutoDj").addEventListener("change", (e) => jukeboxCtrl("auto_dj", Boolean(e.target.checked)));
+    $("chkJbVoiceAutoplay").addEventListener("change", (e) => jukeboxCtrl("voice_autoplay", Boolean(e.target.checked)));
+    $("jbVolSlider").addEventListener("input", (e) => {
+      $("jbVolVal").textContent = `${e.target.value}%`;
+    });
+    $("jbVolSlider").addEventListener("change", (e) => jukeboxCtrl("volume", Number(e.target.value)));
+
+    $("jukeboxPlayForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const q = $("jukeboxQueryInput").value.trim();
+      if (!q) return;
+      try {
+        const res = await api("/api/jukebox/play", {
+          method: "POST",
+          body: JSON.stringify({ query: q, play_now: true }),
+        });
+        $("jukeboxQueryInput").value = "";
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+        }
+        showToast(res.queued_download ? "Đang tìm & tải nhạc" : "Đang phát", q);
+      } catch (err) {
+        showToast("Lỗi tải nhạc", err.message, "error");
+      }
+    });
+
+    window.jukeboxSession = async (action, extra = {}) => {
+      try {
+        const res = await api("/api/jukebox/session", {
+          method: "POST",
+          body: JSON.stringify({ action, ...extra }),
+        });
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+        }
+      } catch (e) {
+        showToast("Lỗi phiên/báo thức", e.message, "error");
+      }
+    };
+
+    window.jukeboxEq = async (payload) => {
+      try {
+        const res = await api("/api/jukebox/eq", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+        }
+      } catch (e) {
+        showToast("Lỗi chỉnh EQ", e.message, "error");
+      }
+    };
+
+    $("btnJbFocus").addEventListener("click", () => jukeboxSession("start_focus", { minutes: Number($("jbSessionMins").value || 15) }));
+    $("btnJbChill").addEventListener("click", () => jukeboxSession("start_chill", { minutes: Number($("jbSessionMins").value || 15) }));
+    $("btnJbNap").addEventListener("click", () => jukeboxSession("start_nap", { minutes: Number($("jbSessionMins").value || 20) }));
+    $("btnJbSetAlarm").addEventListener("click", () => {
+      const t = ($("jbAlarmTime").value || "").trim();
+      const lbl = ($("jbAlarmLabel").value || "").trim();
+      if (!t) return showToast("Thiếu giờ", "Chọn giờ HH:MM trước.", "warning");
+      jukeboxSession("set_alarm", { time_vn: t, label: lbl });
+      $("jbAlarmLabel").value = "";
+    });
+    $("btnJbScheduleMusic").addEventListener("click", () => {
+      const t = ($("jbAlarmTime").value || "").trim();
+      const q = ($("jbScheduleQuery").value || "").trim();
+      const dur = Number($("jbScheduleDur").value || 0);
+      if (!t) return showToast("Thiếu giờ", "Chọn giờ HH:MM trước.", "warning");
+      jukeboxSession("schedule_music", { time_vn: t, query: q, duration_min: Number.isFinite(dur) ? dur : 0 });
+      $("jbScheduleQuery").value = "";
+    });
+
+    document.querySelectorAll(".jb-eq-preset").forEach((btn) => {
+      btn.addEventListener("click", () => jukeboxEq({ preset: btn.dataset.preset }));
+    });
+    $("jbEqBass").addEventListener("input", (e) => {
+      const v = Number(e.target.value);
+      $("jbEqBassVal").textContent = `${v >= 0 ? "+" : ""}${v.toFixed(1)} dB`;
+    });
+    $("jbEqTreble").addEventListener("input", (e) => {
+      const v = Number(e.target.value);
+      $("jbEqTrebleVal").textContent = `${v >= 0 ? "+" : ""}${v.toFixed(1)} dB`;
+    });
+    $("jbEqHp").addEventListener("input", (e) => {
+      $("jbEqHpVal").textContent = `${Math.round(Number(e.target.value))} Hz`;
+    });
+    const sendEqSliders = () => jukeboxEq({
+      bass_db: Number($("jbEqBass").value),
+      treble_db: Number($("jbEqTreble").value),
+      highpass_hz: Number($("jbEqHp").value),
+      enabled: true,
+    });
+    $("jbEqBass").addEventListener("change", sendEqSliders);
+    $("jbEqTreble").addEventListener("change", sendEqSliders);
+    $("jbEqHp").addEventListener("change", sendEqSliders);
+    $("chkJbNorm").addEventListener("change", () => {
+      jukeboxEq({ normalize: Boolean($("chkJbNorm").checked) });
+    });
+
+    $("jbCookiesFile").addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await api("/api/jukebox/cookies", { method: "POST", body: fd });
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+        }
+        $("jbCookiesFile").value = "";
+        showToast("Đã nạp Cookies", `${res.cookies.cookie_count} dòng`);
+      } catch (err) {
+        showToast("Lỗi Cookies", err.message, "error");
+      }
+    });
+
+    $("btnJbCookiesSave").addEventListener("click", async () => {
+      const txt = $("jbCookiesText").value.trim();
+      if (!txt) return showToast("Thiếu nội dung", "Dán nội dung cookies.txt trước.", "warning");
+      try {
+        const res = await api("/api/jukebox/cookies", {
+          method: "POST",
+          body: JSON.stringify({ cookies_text: txt }),
+        });
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+        }
+        $("jbCookiesText").value = "";
+        showToast("Đã lưu Cookies", `${res.cookies.cookie_count} dòng`);
+      } catch (err) {
+        showToast("Lỗi Cookies", err.message, "error");
+      }
+    });
+
+    $("btnJbCookiesClear").addEventListener("click", async () => {
+      try {
+        const res = await api("/api/jukebox/cookies", { method: "DELETE" });
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+        }
+        showToast("Đã xóa Cookies", "Đã gỡ youtube_cookies.txt");
+      } catch (err) {
+        showToast("Lỗi", err.message, "error");
+      }
+    });
+
+    setInterval(() => {
+      if (_jbSessionRemainBase > 0 && !$("jbSessionBanner").classList.contains("hidden")) {
+        const rem = Math.max(0, Math.round(_jbSessionRemainBase - (Date.now() - _jbRenderedAtMs) / 1000));
+        $("jbSessionCountdown").textContent = fmtMMSS(rem);
+      }
+    }, 1000);
+
+    $("btnFanPower").addEventListener("click", () => fanCtrl("power"));
+    $("btnFanModeFixed").addEventListener("click", () => fanCtrl("mode", 0));
+    $("btnFanModeNatural").addEventListener("click", () => fanCtrl("mode", 1));
+    $("btnFanSleepRamp").addEventListener("click", () => fanCtrl("sleep_ramp"));
+    $("btnFanRefresh").addEventListener("click", () => fanCtrl("refresh"));
+    $("fanSpeedSlider").addEventListener("input", (e) => {
+      const v = Number(e.target.value);
+      $("fanSpeedVal").textContent = `${v}% • ${pctToFanHz(v)} Hz`;
+    });
+    $("fanSpeedSlider").addEventListener("change", (e) => {
+      fanCtrl("speed", Number(e.target.value));
+    });
+    $("btnFanScan").addEventListener("click", async () => {
+      $("btnFanScan").disabled = true;
+      $("btnFanScan").textContent = "Đang dò...";
+      try {
+        const res = await api("/api/fan/scan", { method: "POST" });
+        if (state.overview && res.snapshot) {
+          state.overview.fan = res.snapshot;
+          renderFan();
+          syncFanForm(res.snapshot.settings);
+        }
+        if (res.found) {
+          showToast("Tìm thấy Quạt ESP-01S", `${res.fan_url} ${res.fan_mac ? `(${res.fan_mac})` : ""}`);
+        } else {
+          showToast("Chưa thấy Quạt", `Đã dò ${res.scanned_count || 0} thiết bị LAN nhưng chưa thấy /api/state của quạt.`, "warning");
+        }
+      } catch (e) {
+        showToast("Lỗi dò Quạt", e.message, "error");
+      } finally {
+        $("btnFanScan").disabled = false;
+        $("btnFanScan").textContent = "🔍 Quét tìm quạt";
+      }
+    });
+    $("fanConfigForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const res = await api("/api/fan/config", {
+          method: "PATCH",
+          body: JSON.stringify({
+            fan_url: $("fanUrlInput").value.trim(),
+            fan_mac: $("fanMacInput").value.trim(),
+            sleep_ask_time: $("fanSleepAskTime").value || "01:00",
+            sleep_wait_mins: Number($("fanSleepWaitMins").value || 30),
+            max_freq_hz: Number($("fanMaxFreqHz").value || 1800),
+            auto_enabled: $("chkFanAutoEnabled").checked,
+            auto_away: $("chkFanAutoAway").checked,
+            auto_home: $("chkFanAutoHome").checked,
+            auto_sleep: $("chkFanAutoSleep").checked,
+            sleep_voice: $("chkFanSleepVoice").checked,
+          }),
+        });
+        if (state.overview && res.fan) {
+          state.overview.fan = res.fan;
+          if (!state.overview.settings) state.overview.settings = {};
+          state.overview.settings.fan = res.settings;
+          renderFan();
+          syncFanForm(res.settings);
+        }
+        showToast("Đã lưu cấu hình Quạt", "Tự động hóa quạt đã cập nhật.");
+      } catch (err) {
+        showToast("Lỗi lưu Quạt", err.message, "error");
+      }
+    });
+
+    $("btnPlugsRefresh").addEventListener("click", async () => {
+      try {
+        const res = await api("/api/plugs/status?refresh=1");
+        if (state.overview && res.plugs) {
+          state.overview.plugs = res.plugs;
+          renderPlugs();
+        }
+      } catch (e) {
+        showToast("Lỗi làm mới ổ cắm", e.message, "error");
+      }
+    });
+
+    $("btnPlugsScan").addEventListener("click", async () => {
+      $("btnPlugsScan").disabled = true;
+      $("btnPlugsScan").textContent = "Đang quét...";
+      try {
+        const res = await api("/api/plugs/scan", { method: "POST" });
+        if (state.overview && res.plugs) {
+          state.overview.plugs = res.plugs;
+          renderPlugs();
+        }
+        showToast("Đã quét ổ cắm BroadLink", `Tìm thấy ${res.found_count || 0} ổ (thêm mới ${res.added_count || 0}).`);
+      } catch (e) {
+        showToast("Lỗi quét ổ cắm", e.message, "error");
+      } finally {
+        $("btnPlugsScan").disabled = false;
+        $("btnPlugsScan").textContent = "🔍 Quét ổ cắm";
+      }
+    });
+
+    function renderHabits() {
+      const snap = state.overview?.habits || {};
+      const items = snap.habits || [];
+      const cfg = snap.settings || {};
+      const chk = $("chkHabitsAuto");
+      if (chk) chk.checked = cfg.auto_enabled !== false;
+      const badge = $("habitsCountBadge");
+      const activeCnt = items.filter((h) => h.status === "active").length;
+      if (badge) {
+        badge.textContent = `${activeCnt} bật / ${items.length} mẫu`;
+        badge.className = `badge ${activeCnt > 0 ? "b-ok" : "b-info"}`;
+      }
+      const box = $("habitsList");
+      if (!box) return;
+      if (!items.length) {
+        box.innerHTML = `<div class="muted">Chưa có thói quen lặp lại nào được chốt — hệ thống đang âm thầm học từ mỗi lần bạn bật/tắt thiết bị.</div>`;
+        return;
+      }
+      const stMap = {
+        active: ["🟢 Đang tự động", "b-ok"],
+        learning: ["🟡 Đang học thêm", "b-info"],
+        muted: ["⚪ Đang tắt", "b-warn"],
+      };
+      box.innerHTML = items.map((h) => {
+        const [stTxt, stCls] = stMap[h.status] || [h.status, "b-info"];
+        const confPct = Math.round(Number(h.confidence || 0) * 100);
+        const isMuted = h.status === "muted";
+        const toggleAct = isMuted ? "enable" : "mute";
+        const toggleLbl = isMuted ? "Bật lại" : "Tạm tắt";
+        return `
+        <div class="item-card">
+          <div class="row between">
+            <div>
+              <strong>${esc(h.title)}</strong>
+              <div class="muted" style="font-size:0.78rem;">
+                Tin cậy: ${confPct}% • ${h.evidence_days || 0} ngày lặp (${h.source === "chat" ? "từ chat" : "tự học"})
+              </div>
+            </div>
+            <div class="row">
+              <span class="badge ${stCls}">${stTxt}</span>
+              <button type="button" class="btn-sm" data-key="${esc(h.habit_key)}" data-act="${toggleAct}" onclick="habitCtrl(this.dataset.act, this.dataset.key)">${toggleLbl}</button>
+              <button type="button" class="btn-sm btn-danger" data-key="${esc(h.habit_key)}" onclick="habitCtrl('forget', this.dataset.key)">Quên</button>
+            </div>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    window.habitCtrl = async (action, habitKey) => {
+      try {
+        const res = await api("/api/habits/control", {
+          method: "POST",
+          body: JSON.stringify({ action, habit_key: habitKey }),
+        });
+        if (state.overview && res.habits) {
+          state.overview.habits = res.habits;
+          renderHabits();
+        }
+        showToast("Thói quen", res.note || "Đã cập nhật.");
+      } catch (e) {
+        showToast("Lỗi thói quen", e.message, "error");
+      }
+    };
+
+    $("chkHabitsAuto").addEventListener("change", async (e) => {
+      try {
+        const res = await api("/api/habits/settings", {
+          method: "PATCH",
+          body: JSON.stringify({ auto_enabled: e.target.checked }),
+        });
+        if (state.overview && res.habits) {
+          state.overview.habits = res.habits;
+          renderHabits();
+        }
+        showToast("Thói quen tự động", e.target.checked ? "Đã BẬT tự động theo thói quen." : "Đã TẮT tự động theo thói quen.");
+      } catch (err) {
+        showToast("Lỗi cài đặt", err.message, "error");
+      }
+    });
+
+    $("btnHabitsAnalyze").addEventListener("click", async () => {
+      $("btnHabitsAnalyze").disabled = true;
+      try {
+        const res = await api("/api/habits/analyze", { method: "POST" });
+        if (state.overview && res.habits) {
+          state.overview.habits = res.habits;
+          renderHabits();
+        }
+        showToast("Đã phân tích xong", `Hiện có ${(res.habits?.habits || []).length} mẫu thói quen.`);
+      } catch (e) {
+        showToast("Lỗi phân tích", e.message, "error");
+      } finally {
+        $("btnHabitsAnalyze").disabled = false;
+      }
+    });
+
+    // Boot
+    api("/api/auth/check").then((res) => res.authenticated ? showApp() : showLogin()).catch(showLogin);
+  </script>
+</body>
+</html>

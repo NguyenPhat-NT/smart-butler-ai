@@ -1,0 +1,16 @@
+[Unit]
+Description=Smart Butler AI & LAN Smart Home Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/smart_butler
+ExecStart=/opt/smart_butler/venv/bin/python3 /opt/smart_butler/bot.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

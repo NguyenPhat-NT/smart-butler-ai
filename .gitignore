@@ -1,0 +1,23 @@
+# Environment & secrets
+.env
+youtube_cookies.txt
+
+# SQLite databases & backups
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.bak
+backups/
+backup_*/
+music_cache/
+
+# Compiled / build caches
+__pycache__/
+*.py[cod]
+libesp32_dsp.so
+.pytest_cache/
+temp_*/
+venv/
+.pio/
+*.bin
