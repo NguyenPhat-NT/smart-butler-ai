@@ -811,7 +811,7 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
         self.assertIn("gemini-3-flash-preview", called_urls[1])
         self.assertIn("gemini-3-flash-preview", called_urls[2])
 
-    async def test_openrouter_fallback_when_all_gemini_503_and_disabled_for_audit(self):
+    async def test_deepseek_fallback_when_all_gemini_503_and_guarded_for_audit_and_memory(self):
         msgs = gemini_client._convert_gemini_contents_to_openai_messages(
             "System prompt",
             [
@@ -852,29 +852,43 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
         class FakeSession:
             def post(self, url, headers=None, json=None, **kwargs):
                 calls.append((url, headers or {}, json or {}))
-                if "openrouter.ai" in url:
+                if "api.deepseek.com" in url:
+                    import json as _json
+                    if "image_url" in _json.dumps(json or {}):
+                        return FakeResp(
+                            400,
+                            {"error": {"message": ".messages[0].content[1]: You have uploaded an unsupported image."}},
+                        )
                     return FakeResp(
                         200,
-                        {"model": "google/gemma-4-31b-it:free", "choices": [{"message": {"content": '{"messages": ["or_ok"]}'}}]},
+                        {"model": "deepseek-flash", "choices": [{"message": {"content": '{"messages": ["ds_ok"]}'}}]},
                     )
                 return FakeResp(503, "high demand")
 
         gemini_client._MODEL_UNHEALTHY_UNTIL.clear()
         gemini_client._KEY_COOLDOWN.clear()
-        gemini_client._OPENROUTER_COOLDOWN.clear()
+        gemini_client._DEEPSEEK_COOLDOWN.clear()
         try:
             with (
                 patch.object(config, "GEMINI_API_KEYS", ["k1"]),
                 patch.object(gemini_client, "get_api_keys", return_value=["k1"]),
-                patch.object(config, "get_openrouter_api_keys", return_value=["or-dummy-key"]),
-                patch.object(config, "OPENROUTER_MODELS", ["google/gemma-4-31b-it:free"]),
+                patch.object(config, "get_deepseek_api_keys", return_value=["ds-dummy-key"]),
+                patch.object(config, "DEEPSEEK_MODELS", ["deepseek-flash"]),
                 patch.object(gemini_client, "get_session", return_value=FakeSession()),
             ):
                 ok_txt = await gemini_client.call_gemini_api(
                     model="gemini-3.1-flash-lite",
                     fallback_models=["gemini-3.5-flash-lite"],
                     system_instruction="sys",
-                    contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+                    contents=[
+                        {
+                            "role": "user",
+                            "parts": [
+                                {"text": "hi"},
+                                {"inline_data": {"mime_type": "image/jpeg", "data": "QUJD"}},
+                            ],
+                        }
+                    ],
                     response_json=True,
                 )
                 with self.assertRaises(RuntimeError):
@@ -885,15 +899,27 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
                         contents=[{"role": "user", "parts": [{"text": "hi"}]}],
                         allow_external_fallback=False,
                     )
+                with self.assertRaises(RuntimeError):
+                    await gemini_client.call_gemini_api(
+                        model="gemini-3.1-flash-lite",
+                        fallback_models=[],
+                        system_instruction="sys",
+                        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+                        key_role="memory",
+                    )
         finally:
             gemini_client._MODEL_UNHEALTHY_UNTIL.clear()
-            gemini_client._OPENROUTER_COOLDOWN.clear()
+            gemini_client._DEEPSEEK_COOLDOWN.clear()
 
-        self.assertEqual(ok_txt, '{"messages": ["or_ok"]}')
-        or_calls = [c for c in calls if "openrouter.ai" in c[0]]
-        self.assertEqual(len(or_calls), 1)
-        self.assertEqual(or_calls[0][1].get("Authorization"), "Bearer or-dummy-key")
-        self.assertEqual(or_calls[0][2].get("response_format"), {"type": "json_object"})
+        self.assertEqual(ok_txt, '{"messages": ["ds_ok"]}')
+        ds_calls = [c for c in calls if "api.deepseek.com" in c[0]]
+        self.assertEqual(len(ds_calls), 2)
+        self.assertEqual(ds_calls[0][1].get("Authorization"), "Bearer ds-dummy-key")
+        self.assertEqual(ds_calls[0][2].get("model"), "deepseek-flash")
+        self.assertEqual(ds_calls[0][2].get("thinking"), {"type": "disabled"})
+        self.assertEqual(ds_calls[0][2].get("response_format"), {"type": "json_object"})
+        self.assertIn("image_url", json.dumps(ds_calls[0][2]))
+        self.assertNotIn("image_url", json.dumps(ds_calls[1][2]))
 
 
 if __name__ == "__main__":

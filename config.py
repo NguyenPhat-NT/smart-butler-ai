@@ -42,30 +42,25 @@ def get_api_keys(role: str = "chat") -> list:
     return list(GEMINI_API_KEYS)
 
 
-# OpenRouter API (tùy chọn: dự phòng tự động bằng model :free khi toàn bộ Google Gemini gặp 503/429/timeout)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-_raw_or_keys = os.getenv("OPENROUTER_API_KEYS", "")
-OPENROUTER_API_KEYS = [k.strip() for k in _raw_or_keys.split(",") if k.strip()]
-if OPENROUTER_API_KEY and OPENROUTER_API_KEY not in OPENROUTER_API_KEYS:
-    OPENROUTER_API_KEYS.insert(0, OPENROUTER_API_KEY)
-if OPENROUTER_API_KEYS and not OPENROUTER_API_KEY:
-    OPENROUTER_API_KEY = OPENROUTER_API_KEYS[0]
+# DeepSeek API (tùy chọn, trả phí: chỉ dự phòng tự động cho lượt chat chính khi toàn bộ Google Gemini gặp sự cố)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
+_raw_ds_keys = os.getenv("DEEPSEEK_API_KEYS", "")
+DEEPSEEK_API_KEYS = [k.strip() for k in _raw_ds_keys.split(",") if k.strip()]
+if DEEPSEEK_API_KEY and DEEPSEEK_API_KEY not in DEEPSEEK_API_KEYS:
+    DEEPSEEK_API_KEYS.insert(0, DEEPSEEK_API_KEY)
+if DEEPSEEK_API_KEYS and not DEEPSEEK_API_KEY:
+    DEEPSEEK_API_KEY = DEEPSEEK_API_KEYS[0]
 
-_DEFAULT_OPENROUTER_MODELS = (
-    "google/gemma-4-31b-it:free,"
-    "nvidia/nemotron-3-ultra-550b-a55b:free,"
-    "baidu/ernie-5.5-flash-preview:free,"
-    "google/gemma-4-26b-a4b-it:free,"
-    "openrouter/free"
-)
-OPENROUTER_MODELS = [
-    m.strip() for m in os.getenv("OPENROUTER_MODELS", _DEFAULT_OPENROUTER_MODELS).split(",") if m.strip()
+# Chỉ dùng model rẻ/nhanh nhất mặc định để tiết kiệm chi phí khi Gemini nghẽn
+_DEFAULT_DEEPSEEK_MODELS = "deepseek-flash"
+DEEPSEEK_MODELS = [
+    m.strip() for m in os.getenv("DEEPSEEK_MODELS", _DEFAULT_DEEPSEEK_MODELS).split(",") if m.strip()
 ]
 
 
-def get_openrouter_api_keys() -> list:
-    """Trả về danh sách OpenRouter API key dự phòng đã cấu hình."""
-    return list(OPENROUTER_API_KEYS)
+def get_deepseek_api_keys() -> list:
+    """Trả về danh sách DeepSeek API key dự phòng đã cấu hình."""
+    return list(DEEPSEEK_API_KEYS)
 
 
 # Đường dẫn Database SQLite
