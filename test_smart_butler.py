@@ -70,6 +70,7 @@ import sampling_helper
 import trend_helper
 import smart_plugs
 import fan_controller
+import router_controller
 import esp32_audio
 import mcp_tools
 import habit_engine
@@ -228,11 +229,12 @@ class TestMcpToolsAndJsonRpc(unittest.IsolatedAsyncioTestCase):
     async def test_mcp_tools_list_and_speaker_control(self):
         tools = mcp_tools.list_mcp_tools()
         names = {t["name"] for t in tools}
-        self.assertEqual(len(tools), 11)
+        self.assertEqual(len(tools), 13)
         for expected in (
             "get_fan_state", "get_plugs_state", "get_presence_state",
             "get_room_climate", "get_speaker_state", "get_room_overview",
-            "get_learned_habits", "set_fan", "set_plug", "control_speaker", "manage_learned_habit",
+            "get_learned_habits", "get_router_state",
+            "set_fan", "set_plug", "control_speaker", "manage_learned_habit", "control_router",
         ):
             self.assertIn(expected, names)
 
@@ -300,7 +302,7 @@ class TestMcpToolsAndJsonRpc(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(auth_ok.status, 200)
             body = await auth_ok.json()
-            self.assertEqual(len(body["result"]["tools"]), 11)
+            self.assertEqual(len(body["result"]["tools"]), 13)
 
 
 class TestHabitEngine(unittest.IsolatedAsyncioTestCase):
@@ -477,6 +479,136 @@ class TestThreePassPipelineAndDashboard(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent_texts), 2)
         self.assertIn("NHÀ THÔNG MINH", sent_texts[0])
         self.assertIn("THÓI QUEN THIẾT BỊ TỰ HỌC", sent_texts[1])
+
+
+class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._db_file = os.path.join(_TMP_DIR.name, f"{self.id().split('.')[-1]}.db")
+        if os.path.exists(self._db_file):
+            os.remove(self._db_file)
+        config.DB_PATH = self._db_file
+        database.init_db()
+
+    async def test_plug_and_fan_multistep_timers_and_dashboard_routes(self):
+        smart_plugs.save_plugs_config([
+            {"mac": "aa:bb:cc:dd:ee:11", "ip": "192.168.1.51", "name": "Quạt thông gió", "aliases": ["thông gió"]},
+        ])
+        plug_ctrl = smart_plugs.SmartPlugController()
+        fan_ctrl = fan_controller.FanController()
+
+        seq_p = plug_ctrl.schedule_sequence(
+            "aa:bb:cc:dd:ee:11", start_on=True, due_at=2000000000.0, duration_minutes=10
+        )
+        self.assertIsNotNone(seq_p)
+        self.assertEqual(len(plug_ctrl._timers["aa:bb:cc:dd:ee:11"]), 2)
+        self.assertAlmostEqual(seq_p["off_due_at"], 2000000000.0 + 600.0)
+
+        seq_f = fan_ctrl.schedule_sequence(
+            "on", due_at=2000000000.0, speed_pct=20, duration_minutes=15, now_ts=1999999900.0
+        )
+        self.assertEqual(len(seq_f), 2)
+        self.assertEqual(seq_f[0]["action"], "on")
+        self.assertEqual(seq_f[1]["action"], "off")
+
+        app = web_dashboard.create_app(bot=None, target_user_id=778)
+        with patch.object(fan_controller, "get_controller", return_value=fan_ctrl), \
+             patch.object(smart_plugs, "get_controller", return_value=plug_ctrl):
+            async with TestClient(TestServer(app)) as client:
+                pin = web_dashboard.get_effective_pin()
+                await client.post("/api/login", json={"pin": pin})
+
+                r_fan = await client.post(
+                    "/api/fan/control",
+                    json={"action": "timer", "value": True, "delay_minutes": 5, "duration_minutes": 10},
+                )
+                self.assertEqual(r_fan.status, 200)
+                f_snap = (await r_fan.json())["data"]["fan"]
+                self.assertTrue(f_snap.get("timers") or f_snap.get("timer"))
+
+                r_plug = await client.post(
+                    "/api/plugs/control",
+                    json={"mac": "aa:bb:cc:dd:ee:11", "action": "timer", "value": True, "delay_minutes": 5, "duration_minutes": 10},
+                )
+                self.assertEqual(r_plug.status, 200)
+                p_list = (await r_plug.json())["data"]["plugs"]
+                self.assertEqual(len(p_list[0].get("timers") or []), 2)
+
+    def test_anti_repetition_open_loops_and_call_decay(self):
+        self.assertTrue(database.is_trivial_open_loop_topic("Bật quạt thông gió 10 phút"))
+        self.assertTrue(database.is_trivial_open_loop_topic("Đi ăn sáng món ấm nóng"))
+        self.assertFalse(database.is_trivial_open_loop_topic("Họp dự án quan trọng lúc 9h"))
+
+        uid = 66101
+        t0 = 1794990000.0
+        database.apply_session_state_update(uid, {"call_status": "in_call"}, now_ts=t0)
+        # 2 giờ sau trạng thái call vẫn giữ nếu chưa hết timeout, nhưng sau 4 giờ không cập nhật call phải tự ended
+        database.apply_session_state_update(uid, {"user_activity": "đọc tài liệu"}, now_ts=t0 + 4 * 3600.0)
+        st = database.get_session_state(uid, now_ts=t0 + 4 * 3600.0)
+        self.assertEqual(st["call_status"], "ended")
+
+        recent_bot = ["Tối nay bạn nhớ tắt điện thoại đi ngủ sớm nha!"]
+        msgs, _, trimmed = gemini_client._trim_repetitive_trailing_sentences(
+            ["Tôi đã bật đèn phòng lên rồi nhé. Tối nay nhớ tắt điện thoại đi ngủ sớm nha!"],
+            recent_bot,
+            user_text="bật đèn giúp mình",
+        )
+        self.assertTrue(trimmed)
+        self.assertEqual(msgs, ["Tôi đã bật đèn phòng lên rồi nhé."])
+
+    async def test_router_controller_settings_and_dashboard_status(self):
+        router_controller.save_router_settings({
+            "enabled": True,
+            "router_url": "http://192.168.1.1/",
+            "username": "root",
+            "password": "secret-router-pass",
+        })
+        saved = router_controller.get_router_settings(mask_secret=True)
+        self.assertEqual(saved["router_url"], "http://192.168.1.1")
+        self.assertEqual(saved["username"], "root")
+        self.assertTrue(saved["has_password"])
+        self.assertEqual(saved["password"], "")
+
+        rt_ctrl = router_controller.OpenWrtRouterController()
+        blocked = await rt_ctrl.execute_ai_router_action({"action": "reboot"})
+        self.assertIn("Từ chối", blocked)
+
+        app = web_dashboard.create_app(bot=None, target_user_id=779)
+        with patch.object(router_controller, "get_controller", return_value=rt_ctrl):
+            async with TestClient(TestServer(app)) as client:
+                pin = web_dashboard.get_effective_pin()
+                await client.post("/api/login", json={"pin": pin})
+                r_st = await client.get("/api/router/status?refresh=0")
+                self.assertEqual(r_st.status, 200)
+                body = await r_st.json()
+                self.assertTrue(body["ok"])
+                self.assertIn("router", body["data"])
+
+    async def test_live_speaker_ws_and_manager(self):
+        mgr = esp32_audio.ESP32AudioManager()
+        gen = await mgr.start_live_stream(source="web_cast", label="Test Tab", client_ip="127.0.0.1")
+        self.assertTrue(mgr.live_stream_active)
+        self.assertEqual(mgr.status, "playing")
+        pcm_chunk = b"\x10\x00" * 480
+        self.assertTrue(mgr.push_live_pcm(pcm_chunk, live_gen=gen))
+        self.assertEqual(len(mgr._live_pcm_buffer), len(pcm_chunk))
+        await mgr.stop_live_stream(live_gen=gen, reason="unit_test")
+        self.assertFalse(mgr.live_stream_active)
+
+        app = web_dashboard.create_app(bot=None, target_user_id=780)
+        with patch.object(esp32_audio, "get_manager", return_value=mgr):
+            async with TestClient(TestServer(app)) as client:
+                async with client.ws_connect("/api/jukebox/live_ws?source=web_cast&label=UnitWS") as ws:
+                    ready = await ws.receive_json()
+                    self.assertEqual(ready["type"], "live_ready")
+                    self.assertEqual(ready["sample_rate"], esp32_audio.SAMPLE_RATE)
+                    self.assertTrue(mgr.live_stream_active)
+                    await ws.send_bytes(b"\x20\x00" * 240)
+                    await ws.send_json({"type": "ping"})
+                    pong = await ws.receive_json()
+                    self.assertEqual(pong["type"], "pong")
+                    self.assertTrue(pong["live"])
+                    await ws.send_json({"type": "stop"})
+                self.assertFalse(mgr.live_stream_active)
 
 
 if __name__ == "__main__":

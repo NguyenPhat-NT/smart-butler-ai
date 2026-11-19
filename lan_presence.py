@@ -632,6 +632,19 @@ async def _refresh_presence_once_impl(target_user_id: int = 0) -> Dict[str, Any]
         _check_target(pc_mac, _STATE.get("pc_ip", ""), tcp_ports=pc_probe_ports),
     )
 
+    # Bổ sung từ bảng hostapd/assoclist của Router OpenWrt (điện thoại iOS/Android ngủ sâu vẫn bám Wi-Fi)
+    if phone_mac and (not phone_online or not phone_ip):
+        try:
+            import router_controller
+            assoc_map = router_controller.get_controller().get_associated_mac_map()
+            p_assoc = assoc_map.get(phone_mac)
+            if p_assoc:
+                phone_online = True
+                if p_assoc.get("ip"):
+                    phone_ip = str(p_assoc["ip"])
+        except Exception:
+            pass
+
     if phone_online:
         _STATE["phone_last_seen"] = now_ts
     if pc_online:
@@ -654,6 +667,7 @@ async def _refresh_presence_once_impl(target_user_id: int = 0) -> Dict[str, Any]
             pass
 
     prev_state = _STATE.get("state", "unconfigured")
+    prev_phone_online = bool(_STATE.get("phone_online"))
     prev_pc_online = bool(_STATE.get("pc_online"))
     prev_pc_ip = _STATE.get("pc_ip", "")
 
@@ -805,7 +819,7 @@ async def _refresh_presence_once_impl(target_user_id: int = 0) -> Dict[str, Any]
 
     _STATE["updated_at"] = now_ts
     database.clear_pc_now_playing_if_stale(force_pc_offline=bool(pc_mac and not pc_online))
-    if new_state != prev_state or pc_online != prev_pc_online or pc_ip != prev_pc_ip:
+    if new_state != prev_state or pc_online != prev_pc_online or phone_online != prev_phone_online or pc_ip != prev_pc_ip:
         lan_events.publish("presence_update", get_presence_snapshot())
     return get_presence_snapshot()
 

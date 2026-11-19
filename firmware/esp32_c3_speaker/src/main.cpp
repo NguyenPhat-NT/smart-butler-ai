@@ -73,6 +73,9 @@ static const size_t   OPUS_MAX_PACKET_BYTES  = 768;
 static const size_t   OPUS_RING_BYTES        = 28672; // ~7-8 giay am thanh Opus 32kbps trong SRAM
 static const uint32_t OPUS_PREFILL_PACKETS   = 5;     // 300ms khi bat dau phat moi
 static const uint32_t OPUS_RESUME_PACKETS    = 4;     // 240ms khi phuc hoi sau rot goi
+static const uint32_t OPUS_LIVE_PREFILL_PKTS = 2;     // 120ms khi chay che do Loa Live do tre thap
+static const uint32_t OPUS_LIVE_RESUME_PKTS  = 2;
+static const uint32_t OPUS_LIVE_MAX_QUEUE    = 5;     // Gioi han hang doi live (~300ms) chong tre tich luy
 static const uint32_t STREAM_IDLE_SILENCE_MS = 600;
 static const i2s_port_t I2S_PORT             = I2S_NUM_0;
 static const int32_t  AUDIO_OUTPUT_GAIN_PCT  = 62;    // Giam nhe gain dau ra (~ -4.1 dB) cho MAX98357 em tai hon
@@ -98,6 +101,7 @@ static TaskHandle_t  s_wsTaskHandle  = nullptr;
 
 static volatile bool     g_otaInProgress    = false;
 static volatile bool     s_wsConnected      = false;
+static volatile bool     s_lowLatencyMode   = false;
 static volatile uint32_t s_lastAudioRxAt    = 0;
 static volatile uint32_t s_flushEpoch       = 0;
 
@@ -738,7 +742,9 @@ static void audioI2sTask(void* param) {
         if (!playing) {
             uint32_t pkts = opusPacketCount();
             uint32_t quietFor = (uint32_t)(nowMs - s_lastAudioRxAt);
-            uint32_t needPkts = inRecovery ? OPUS_RESUME_PACKETS : OPUS_PREFILL_PACKETS;
+            uint32_t needPkts = s_lowLatencyMode
+                ? (inRecovery ? OPUS_LIVE_RESUME_PKTS : OPUS_LIVE_PREFILL_PKTS)
+                : (inRecovery ? OPUS_RESUME_PACKETS : OPUS_PREFILL_PACKETS);
             if (pkts >= 1) {
                 if (!s_i2sEnabled && setI2sActive(true)) {
                     writeSilenceFramesToI2S(480);
@@ -771,6 +777,14 @@ static void audioI2sTask(void* param) {
         uint32_t pktsBeforePop = opusPacketCount();
         if (pktsBeforePop < s_dbgPktMin) {
             s_dbgPktMin = pktsBeforePop;
+        }
+
+        if (s_lowLatencyMode) {
+            while (opusPacketCount() > OPUS_LIVE_MAX_QUEUE) {
+                if (opusRingPop(opusPkt, sizeof(opusPkt)) == 0) {
+                    break;
+                }
+            }
         }
 
         uint16_t pktLen = opusRingPop(opusPkt, sizeof(opusPkt));
@@ -873,6 +887,7 @@ static void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 
         case WStype_DISCONNECTED:
             s_wsConnected = false;
+            s_lowLatencyMode = false;
             s_lastAudioPktAt = 0;
             markPerformanceActivity(3000);
             Serial.println("[WS] Mat ket noi WebSocket, se tu dong noi lai...");
@@ -903,6 +918,12 @@ static void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
                 size_t copyLen = (length < (sizeof(txtBuf) - 1U)) ? length : (sizeof(txtBuf) - 1U);
                 memcpy(txtBuf, payload, copyLen);
                 txtBuf[copyLen] = '\0';
+                if (strstr(txtBuf, "\"latency_mode\"") != nullptr) {
+                    s_lowLatencyMode = (
+                        strstr(txtBuf, "\"low_latency\":true") != nullptr
+                        || strstr(txtBuf, "\"low_latency\": true") != nullptr
+                    );
+                }
                 if (strstr(txtBuf, "\"audio_reset\"") != nullptr) {
                     opusRingReset();
                     s_flushEpoch = s_flushEpoch + 1U;

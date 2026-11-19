@@ -83,3 +83,8 @@ try:
     INTERNAL_MUSIC_CACHE_MAX_MB = max(50, int(os.getenv("INTERNAL_MUSIC_CACHE_MAX_MB", "150") or 150))
 except ValueError:
     INTERNAL_MUSIC_CACHE_MAX_MB = 150
+
+# Router Wi-Fi OpenWrt / LuCI ubus JSON-RPC (tùy chọn)
+ROUTER_URL = os.getenv("ROUTER_URL", "http://192.168.1.1").strip().rstrip("/") or "http://192.168.1.1"
+ROUTER_USER = os.getenv("ROUTER_USER", "root").strip() or "root"
+ROUTER_PASSWORD = os.getenv("ROUTER_PASSWORD", "").strip()

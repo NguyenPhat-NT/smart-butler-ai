@@ -7,27 +7,30 @@ Trợ lý AI Quản gia cá nhân 24/7 kiêm trung tâm điều khiển nhà th�
 - **🎭 Persona cấu hình linh hoạt (`persona.py`):**
   - Chuyển đổi nhanh giữa 3 phong cách: `butler` (Quản gia lịch thiệp), `assistant` (Trợ lý súc tích) và `companion` (Bạn đồng hành thân thiện).
   - Tùy chỉnh tên Bot (`BUTLER_NAME`), tên chủ nhà (`OWNER_NAME`), thành phố thời tiết (`WEATHER_CITY`) qua `.env` hoặc trực tiếp trên tab **Persona & Hồ sơ** của Web Dashboard mà không cần khởi động lại.
-- **🧠 Pipeline AI 3-Pass + Bộ nhớ Vector SQLite:**
-  - **Pass 1 (Chiến lược):** Đọc ngữ cảnh, trạng thái phiên, tự quyết định gọi **MCP `fetch_tools`** khi cần tra cứu thiết bị, hoặc tra cứu Web / nhắc việc.
-  - **Pass 2 (Chuốt câu trả lời):** Tạo câu trả lời tự nhiên theo persona đã chọn; hỗ trợ gửi **Voice Note** qua TTS Server trên PC.
+- **🧠 Pipeline AI-First 3-Pass + Chống lặp & Bộ nhớ Vector SQLite:**
+  - **Pass 1 (Chiến lược + AI-First Device Control):** Đọc ngữ cảnh, trạng thái phiên, chỉ quyết định thao tác `fan_action` / `plug_action` / `music_action` / `router_action` sau khi hiểu đúng ý định (tránh bật/tắt nhầm câu kể/phủ định), hỗ trợ đặt lịch `at_time_vn` / `delay_minutes` / `duration_minutes` đa chặng bền vững; tự chọn **MCP `fetch_tools`** khi cần tra cứu thiết bị, hoặc tra cứu Web / nhắc việc.
+  - **Pass 2 (Chuốt câu trả lời + Cắt lặp 0ms):** Tạo câu trả lời tự nhiên theo persona đã chọn; gắn quy tắc One-and-Done, 3-gate `open_loops` và tự động cắt đuôi nếu lặp lại câu giục/bối cảnh cũ; hỗ trợ gửi **Voice Note** qua TTS Server trên PC.
   - **Pass 3 (Logic Audit):** Rà soát mâu thuẫn thời gian/trạng thái trước khi gửi (fail-open).
   - **Vector Memory:** Lưu trữ Fact Book lâu dài + Episodic Memory với Gemini Embedding `512`-dim, tự động kết tinh lúc `23:30` hằng ngày.
 - **🔌 MCP Server tích hợp sẵn (`mcp_tools.py` + `POST /mcp`):**
   - Chuẩn **JSON-RPC 2.0** (`initialize`, `tools/list`, `tools/call`, `ping`) tại `http://<HOST_IP>:8080/mcp` (bảo vệ bằng `Bearer <DASHBOARD_PIN>`).
-  - Cho phép cả AI nội bộ lẫn IDE/Desktop client bên ngoài (Antigravity, Cursor, Claude Desktop) đọc trạng thái & điều khiển trực tiếp 11 tools:
-    - Đọc: `get_fan_state`, `get_plugs_state`, `get_presence_state`, `get_room_climate`, `get_speaker_state`, `get_room_overview`, `get_learned_habits`
-    - Điều khiển: `set_fan`, `set_plug`, `control_speaker`, `manage_learned_habit`
+  - Cho phép cả AI nội bộ lẫn IDE/Desktop client bên ngoài (Antigravity, Cursor, Claude Desktop) đọc trạng thái & điều khiển trực tiếp 13 tools:
+    - Đọc: `get_fan_state`, `get_plugs_state`, `get_presence_state`, `get_room_climate`, `get_speaker_state`, `get_router_state`, `get_room_overview`, `get_learned_habits`
+    - Điều khiển: `set_fan`, `set_plug`, `control_speaker`, `manage_learned_habit`, `control_router` (Wake-on-LAN PC, chặn tạm máy lạ có rào chắn)
+- **🌐 Giám sát Router Wi-Fi OpenWrt & Wake-on-LAN (`router_controller.py`):**
+  - Đọc thông số Router qua `/ubus` JSON-RPC (`system.info`, `mwan3`, `iwinfo.assoclist`, `dhcp.leases`), cảnh báo MAC lạ vào Wi-Fi, tăng độ chính xác LAN Presence, hỗ trợ Wake-on-LAN bật PC từ xa và chặn tạm máy lạ an toàn (chặn cứng reboot/đổi SSID qua chat).
 - **🔄 Bộ tự học thói quen ngầm (`habit_engine.py`, 0 Gemini call phụ):**
   - Ghi nhận thao tác thật từ người dùng (`device_events`), tự phát hiện 4 nhóm thói quen: **đèn theo khung giờ**, **hạn mức thời gian tắt quạt thông gió**, **bật/tắt quạt theo nhiệt độ DHT11**, và **đồng bộ theo PC bật/tắt**.
   - Cơ chế an toàn: chỉ chạy khi đủ độ tin cậy, kiểm tra hiện diện Wi-Fi (`lan_presence.py`) & giờ ngủ, tự hạ điểm / tạm khóa nếu chủ nhà thao tác ngược lại trong 10 phút sau khi tự chạy.
-- **🌐 Web Dashboard nội bộ (`http://<IP>:8080`):**
+- **🖥️ Web Dashboard nội bộ (`http://<IP>:8080`):**
   - Bảo vệ bằng mã PIN + HMAC cookie, cập nhật realtime qua **SSE (`/api/events`)**.
-  - Quản lý: Thiết bị Smart Home, Persona, Ký ức Vector, Lịch hẹn, Nhịp chủ động, Thói quen tự học, Sao lưu/Khôi phục DB (`.db.gz`) và LAN Watchdog.
+  - Giao diện **Điều khiển Phòng Nhanh** đặt ngay đầu trang (`Bật PC WoL`, `Chế độ Đi ngủ`, `Tắt hết thiết bị`, hẹn giờ bật/tắt theo thời lượng & chuỗi đa bước cho Quạt/Ổ cắm).
+  - Quản lý: Thiết bị Smart Home, Loa Không Dây, Router OpenWrt, Persona, Ký ức Vector, Lịch hẹn, Nhịp chủ động, Thói quen tự học, Sao lưu/Khôi phục DB (`.db.gz`) và LAN Watchdog.
 - **🔧 Tích hợp phần cứng tùy chọn (Plug & Play):**
   - **Ổ cắm BroadLink SPmini (`smart_plugs.py`):** Điều khiển qua UDP AES-128-CBC không cần Cloud ngoài hay thư viện bên thứ 3; bấm **Quét LAN** trên Dashboard để nhận diện và đặt tên thiết bị.
-  - **Quạt BLDC Wi-Fi (`firmware/esp01s_bldc_fan/`):** Firmware ESP-01S điều khiển xung 1005–3000 Hz êm ái, có bước lùi giờ ngủ (`sleep_ramp`).
-  - **Loa Wi-Fi + Cảm biến phòng (`firmware/esp32_c3_speaker/`):** ESP32-C3 stream nhạc Opus + WebSocket, phát giọng nói TTS, tích hợp cảm biến nhiệt/ẩm DHT11, nút chạm, EQ/DSP (`esp32_dsp.py`), phiên Tập trung / Chợp mắt / Báo thức.
-  - **Cầu nối PC tùy chọn (`tools/`):** `pc_media_bridge.py` (đồng bộ nhạc đang phát trên Windows) và `music_download_server.py` (hỗ trợ tải nhạc LAN cho máy biên ít RAM).
+  - **Quạt BLDC Wi-Fi (`firmware/esp01s_bldc_fan/`):** Firmware ESP-01S điều khiển xung 1005–3000 Hz êm ái, có bước lùi giờ ngủ (`sleep_ramp`) và hẹn giờ bền vững đa chặng.
+  - **Loa Wi-Fi Không Dây WebSocket + Cảm biến phòng (`firmware/esp32_c3_speaker/`):** ESP32-C3 stream nhạc Opus + WebSocket, hỗ trợ chế độ **Loa Không Dây độ trễ thấp (`Low-Latency`, prefill ~120ms)** qua `/api/jukebox/live_ws` (**Cast Tab trình duyệt / File nhạc từ máy / Tiếng PC Windows WASAPI Loopback**), tự động ducking khi đọc TTS, tích hợp DHT11, nút chạm, EQ/DSP (`esp32_dsp.py`), phiên Tập trung / Chợp mắt / Báo thức.
+  - **Cầu nối PC tùy chọn (`tools/`):** `pc_media_bridge.py` (đồng bộ nhạc đang phát trên Windows), `music_download_server.py` (hỗ trợ tải nhạc LAN & WASAPI Loopback `/live_audio/ws` / `--push-live`), và `run_pc_live_speaker.bat` (bật nhanh phát toàn bộ âm thanh Windows PC ra loa ESP32-C3 qua WebSocket).
 
 ## 📋 Yêu cầu hệ thống
 
@@ -119,9 +122,10 @@ python3 test_smart_butler.py -v
 - `config.py`, `persona.py` — Cấu hình môi trường & nhân vật Quản gia
 - `gemini_client.py`, `character_bible.py` — Pipeline AI 3-Pass & prompt quản gia
 - `database.py`, `vector_memory.py` — SQLite schema, Vector Embeddings, Fact Book & `device_events` / `learned_habits`
-- `mcp_tools.py` — Bộ 11 MCP Tools + JSON-RPC 2.0 handler
+- `mcp_tools.py` — Bộ 13 MCP Tools + JSON-RPC 2.0 handler
 - `habit_engine.py` — Động cơ phân tích thói quen & thực thi tự động an toàn
-- `web_dashboard.py`, `static/dashboard.html` — Web Server `aiohttp`, API REST, SSE & giao diện điều khiển
-- `fan_controller.py`, `smart_plugs.py`, `esp32_audio.py` — Điều khiển phần cứng LAN
+- `router_controller.py` — Giám sát Router OpenWrt (`/ubus`), cảnh báo MAC lạ & Wake-on-LAN an toàn
+- `web_dashboard.py`, `static/dashboard.html` — Web Server `aiohttp`, API REST, SSE, Live Audio WebSocket & giao diện điều khiển
+- `fan_controller.py`, `smart_plugs.py`, `esp32_audio.py` — Điều khiển phần cứng LAN & stream WebSocket độ trễ thấp
 - `firmware/` — Mã nguồn mạch `esp01s_bldc_fan` & `esp32_c3_speaker`
-- `tools/` — Script hỗ trợ chạy trên PC (`pc_media_bridge.py`, `music_download_server.py`)
+- `tools/` — Script hỗ trợ chạy trên PC (`pc_media_bridge.py`, `music_download_server.py`, `run_pc_live_speaker.bat`)

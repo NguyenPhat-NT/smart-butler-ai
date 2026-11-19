@@ -823,6 +823,7 @@ LƯU Ý PHÂN BIỆT: Nếu {owner_name} chỉ dự định/báo lịch trình (
    - 3 (Cốt lõi / dài hạn): thông tin nền quan trọng, thói quen sinh hoạt cố định, ghi chú dài hạn của {owner_name}.
 3. "durable_user_fact": CHỈ điền 1 câu ngắn nếu lượt này vừa lộ ra THÔNG TIN NỀN LÂU DÀI MỚI về {owner_name} (công việc, lịch học/làm việc cố định, sở thích âm nhạc/nhiệt độ, thói quen lặp lại, tên phòng/thiết bị, thú cưng/gia đình) để đưa ngay vào Fact Book; nếu chỉ là tin nhắn nhất thời thì BẮT BUỘC đặt null.
 4. "open_loop": Đầu việc ĐANG THEO DÕI chưa khép lại ({owner_name} sắp có cuộc họp/thi/sự kiện, đang đợi kết quả, hoặc hẹn giờ nhắc tiếp).
+   - **BẮT BUỘC đặt `action="none"`** đối với các lời dặn sinh hoạt thường ngày (đi ngủ, dậy sớm, đi ăn, uống nước, nghỉ ngơi) hoặc lệnh hẹn giờ thiết bị/báo thức (bật/tắt quạt, đèn, loa) vì hệ thống đã tự theo dõi riêng.
    - Nếu mở mới/cập nhật thì action="add", nếu đã xong/có kết quả ở lượt này thì action="resolve", bình thường action="none".
    - Nếu có mốc giờ hẹn rõ ràng (vd "11h dậy", "tối 9h họp"), điền "target_iso_vn": "YYYY-MM-DD HH:MM".
 
@@ -889,7 +890,11 @@ Trả về duy nhất JSON:
         ol_topic = _sanitize_memory_pronoun_inversion(str(ol_raw.get("topic") or "").strip())
         ol_note = _sanitize_memory_pronoun_inversion(str(ol_raw.get("note") or "").strip())
         if ol_topic and ol_topic.lower() != "null":
-            if ol_act == "add" and not database.is_memory_rejected(user_id, ol_topic):
+            if (
+                ol_act == "add"
+                and not database.is_memory_rejected(user_id, ol_topic)
+                and not database.is_trivial_open_loop_topic(ol_topic, ol_note)
+            ):
                 target_ts = _resolve_open_loop_target_ts(
                     ol_raw.get("target_iso_vn"),
                     ol_topic,

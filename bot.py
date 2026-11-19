@@ -931,33 +931,16 @@ async def handle_text(message: Message):
                     + "]"
                 )
 
-        # Kiểm tra ý định điều khiển nhạc / loa phòng ESP32 & Quạt BLDC tự nhiên trong chat
-        jukebox_note = ""
+        # AI-First Device Control: KHÔNG dùng Regex tự bật/tắt thiết bị trước LLM để tránh hiểu sai ngữ cảnh
+        # (vd câu kể lại, phủ định, hỏi thăm hay dạy thói quen). Pass 1 sẽ đọc trọn ngữ cảnh và quyết định
+        # `fan_action` / `plug_action` / `music_action` / `habit_action`, sau đó thực thi ngay trước Pass 2 & Pass 3.
+        sleep_prompt_note = ""
         try:
-            jukebox_note = await esp32_audio.handle_natural_music_intent(text)
-        except Exception as jb_err:
-            logger.warning(f"Lỗi xử lý ý định nhạc Jukebox: {jb_err}")
-
-        fan_note = ""
-        fan_handled = False
-        try:
-            fan_note = await fan_controller.get_controller().handle_natural_fan_intent(text)
-            fan_handled = any(
-                k in fan_note
-                for k in ("Đã bật", "Đã tắt", "Đã chỉnh", "Đã chuyển", "Đã tăng", "Đã giảm", "Đang giảm", "đã hủy", "bắt đầu giảm")
-            )
+            sleep_prompt_note = fan_controller.get_controller().build_sleep_prompt_context_note()
         except Exception as fan_err:
-            logger.warning(f"Lỗi xử lý ý định Quạt BLDC: {fan_err}")
+            logger.warning(f"Lỗi đọc ngữ cảnh giờ ngủ Quạt BLDC: {fan_err}")
 
-        plug_note = ""
-        plug_handled = False
-        try:
-            plug_note = await smart_plugs.get_controller().handle_natural_plug_intent(text)
-            plug_handled = any(k in plug_note for k in ("đã BẬT", "đã TẮT", "Đã hẹn"))
-        except Exception as plug_err:
-            logger.warning(f"Lỗi xử lý ý định Ổ cắm BroadLink: {plug_err}")
-
-        extra_turn_note = "\n".join(x for x in (jukebox_note, fan_note, plug_note) if x) or None
+        extra_turn_note = sleep_prompt_note or None
 
         try:
             response_data = await gemini_client.chat_with_butler(
@@ -972,9 +955,6 @@ async def handle_text(message: Message):
             await process_ai_response(
                 user_id, response_data, user_message=message,
                 api_elapsed_sec=api_elapsed, user_text=text,
-                jukebox_handled=bool(jukebox_note),
-                fan_handled=fan_handled,
-                plug_handled=plug_handled,
             )
         except Exception as e:
             logger.error(f"Text handle error: {e}", exc_info=True)
@@ -1019,8 +999,8 @@ async def process_ai_response(user_id: int, response_data: dict, user_message: M
     # 2. Tính điểm dự kiến để cân nhịp phản hồi; chỉ ghi DB chính thức nếu gửi Telegram thành công
     projected_score = max(0, min(100, int(prev_state.get("affinity_score", 0)) + int(delta or 0)))
 
-    # 2.5. AI DJ ngữ cảnh: thực thi music_action từ Pass 1 nếu lượt chat chưa kích hoạt ý định nhạc trực tiếp
-    if not jukebox_handled and isinstance(response_data.get("music_action"), dict):
+    # 2.5. AI DJ ngữ cảnh: fallback thực thi music_action nếu chưa pre-executed sau Pass 1
+    if not jukebox_handled and not response_data.get("_pre_executed_music") and isinstance(response_data.get("music_action"), dict):
         try:
             ai_ma_note = await esp32_audio.execute_ai_music_action(response_data["music_action"])
             if ai_ma_note:
@@ -1028,8 +1008,8 @@ async def process_ai_response(user_id: int, response_data: dict, user_message: M
         except Exception as ma_err:
             logger.warning(f"Lỗi thực thi AI music_action: {ma_err}")
 
-    # 2.6. AI Smart Fan: thực thi fan_action từ Pass 1 nếu lượt chat chưa xử lý trực tiếp
-    if not fan_handled and isinstance(response_data.get("fan_action"), dict):
+    # 2.6. AI Smart Fan: fallback thực thi fan_action nếu chưa pre-executed sau Pass 1
+    if not fan_handled and not response_data.get("_pre_executed_fan") and isinstance(response_data.get("fan_action"), dict):
         try:
             ai_fa_note = await fan_controller.get_controller().execute_ai_fan_action(response_data["fan_action"])
             if ai_fa_note:
@@ -1037,17 +1017,21 @@ async def process_ai_response(user_id: int, response_data: dict, user_message: M
         except Exception as fa_err:
             logger.warning(f"Lỗi thực thi AI fan_action: {fa_err}")
 
-    # 2.7. AI Smart Plug: thực thi plug_action từ Pass 1 nếu lượt chat chưa xử lý trực tiếp
-    if not plug_handled and isinstance(response_data.get("plug_action"), dict):
+    # 2.7. AI Smart Plug: fallback thực thi plug_action nếu chưa pre-executed sau Pass 1
+    plug_act_fallback = response_data.get("plug_action")
+    if not plug_handled and not response_data.get("_pre_executed_plug") and (
+        isinstance(plug_act_fallback, dict)
+        or (isinstance(plug_act_fallback, list) and any(isinstance(x, dict) for x in plug_act_fallback))
+    ):
         try:
-            ai_pa_note = await smart_plugs.get_controller().execute_ai_plug_action(response_data["plug_action"])
+            ai_pa_note = await smart_plugs.get_controller().execute_ai_plug_action(plug_act_fallback)
             if ai_pa_note:
-                logger.info(f"🔌 [AI Plug]: {response_data['plug_action']} -> executed")
+                logger.info(f"🔌 [AI Plug]: {plug_act_fallback} -> executed")
         except Exception as pa_err:
             logger.warning(f"Lỗi thực thi AI plug_action: {pa_err}")
 
-    # 2.8. Smart Habits: ghi nhận/tạm tắt/bật/quên thói quen nếu anh nhắc trực tiếp trong chat
-    if isinstance(response_data.get("habit_action"), dict):
+    # 2.8. Smart Habits: fallback nếu chưa pre-executed sau Pass 1
+    if not response_data.get("_pre_executed_habit") and isinstance(response_data.get("habit_action"), dict):
         try:
             import habit_engine
             ai_ha_note = habit_engine.execute_ai_habit_action(response_data["habit_action"])
@@ -1055,6 +1039,16 @@ async def process_ai_response(user_id: int, response_data: dict, user_message: M
                 logger.info(f"🧠 [AI Habit]: {response_data['habit_action']} -> {ai_ha_note}")
         except Exception as ha_err:
             logger.warning(f"Lỗi thực thi AI habit_action: {ha_err}")
+
+    # 2.9. Router Wi-Fi OpenWrt: fallback nếu chưa pre-executed sau Pass 1
+    if not response_data.get("_pre_executed_router") and isinstance(response_data.get("router_action"), dict):
+        try:
+            import router_controller
+            ai_ra_note = await router_controller.get_controller().execute_ai_router_action(response_data["router_action"])
+            if ai_ra_note:
+                logger.info(f"🌐 [AI Router]: {response_data['router_action']} -> {ai_ra_note}")
+        except Exception as ra_err:
+            logger.warning(f"Lỗi thực thi AI router_action: {ra_err}")
 
     # 3. Smart Butler không dùng kho ảnh cá nhân dựng sẵn
     photo_path_to_send = None
@@ -1177,6 +1171,7 @@ async def main():
     import backup_helper
     import web_dashboard
     import habit_engine
+    import router_controller
 
     task_helper.spawn(vector_memory.backfill_missing_embeddings())
 
@@ -1194,6 +1189,7 @@ async def main():
     task_helper.spawn(lan_watchdog.watchdog_loop(bot=bot, target_user_id=target_user), daemon=True)
     task_helper.spawn(fan_controller.fan_monitor_loop(bot=bot, target_user_id=target_user), daemon=True)
     task_helper.spawn(habit_engine.habit_monitor_loop(bot=bot, target_user_id=target_user), daemon=True)
+    task_helper.spawn(router_controller.router_monitor_loop(bot=bot, target_user_id=target_user), daemon=True)
     task_helper.spawn(scheduler.proactive_scheduler_loop(bot, target_user), daemon=True)
 
     dashboard_runner = await web_dashboard.start_dashboard(bot=bot, target_user_id=target_user)
@@ -1202,6 +1198,7 @@ async def main():
         await dp.start_polling(bot)
     finally:
         await web_dashboard.stop_dashboard(dashboard_runner)
+        await router_controller.get_controller().close()
         await esp32_audio.get_manager().shutdown()
         await task_helper.shutdown(timeout_sec=4.0)
         await gemini_client.close_session()

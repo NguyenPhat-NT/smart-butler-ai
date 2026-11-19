@@ -26,6 +26,7 @@ import tempfile
 import unicodedata
 import asyncio
 import contextvars
+import ipaddress
 import logging
 from array import array
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -78,6 +79,13 @@ OPUS_BITRATE = 32000
 OPUS_MAX_PACKET_BYTES = 768
 OPUS_PREFILL_LEAD_SEC = 0.78  # Bơm trước ~13 gói Opus (780ms, ~3.1 KB) cho jitter buffer
 WS_OPUS_AUDIO_TYPE = 0x01
+
+LIVE_AUDIO_SILENCE_TIMEOUT_SEC = 300.0  # Tự ngắt sau 5 phút im lặng liên tục
+LIVE_AUDIO_IDLE_STALE_SEC = 15.0        # Tự ngắt nếu mất luồng gói quá 15 giây
+LIVE_BUFFER_MAX_BYTES = FRAME_BYTES * 10   # 200ms trần buffer tránh trễ tích lũy
+LIVE_BUFFER_TRIM_TO_BYTES = FRAME_BYTES * 4  # Cắt gọn về 80ms khi đầy
+LIVE_SILENCE_PEAK_THRESHOLD = 45        # Ngưỡng biên độ int16 coi là có tiếng
+LIVE_OPUS_PREFILL_LEAD_SEC = 0.14       # Chế độ Live độ trễ thấp (~140ms)
 
 _OPUS_APPLICATION_AUDIO = 2049
 _OPUS_SET_BITRATE_REQUEST = 4002
@@ -2553,6 +2561,18 @@ class ESP32AudioManager:
         self._ws_control_queues: Dict[int, asyncio.Queue] = {}
         self._ws_last_hello: Dict[str, Any] = {}
 
+        self.live_stream_active: bool = False
+        self.live_stream_paused: bool = False
+        self.live_stream_source: str = ""
+        self.live_stream_label: str = ""
+        self.live_stream_client_ip: str = ""
+        self.live_stream_started_at: float = 0.0
+        self.live_stream_last_frame_at: float = 0.0
+        self.live_stream_last_audible_at: float = 0.0
+        self._live_pcm_buffer = bytearray()
+        self._live_gen: int = 0
+        self._pc_bridge_pull_task: Optional[asyncio.Task] = None
+
         self._download_lock: Optional[asyncio.Lock] = None
         self._wake_event: Optional[asyncio.Event] = None
         self._bg_tasks: set = set()
@@ -3507,6 +3527,20 @@ class ESP32AudioManager:
                 "ws_connected": self.active_ws_clients > 0,
                 "codec": self.esp32_codec,
             },
+            "live_stream": {
+                "active": bool(self.live_stream_active),
+                "paused": bool(self.live_stream_paused),
+                "source": self.live_stream_source,
+                "label": self.live_stream_label,
+                "client_ip": self.live_stream_client_ip,
+                "started_at": self.live_stream_started_at,
+                "silence_sec": (
+                    max(0, int(round(now - self.live_stream_last_audible_at)))
+                    if (self.live_stream_active and self.live_stream_last_audible_at > 0)
+                    else 0
+                ),
+                "pc_bridge_configured": bool(_get_music_dl_endpoint()),
+            },
             "dht11": dht,
             "cache": cache_info,
         }
@@ -3514,8 +3548,244 @@ class ESP32AudioManager:
     def publish_update(self) -> None:
         lan_events.publish("jukebox_update", self.get_status_snapshot())
 
+    @staticmethod
+    def _is_pcm_chunk_audible(pcm_bytes: bytes) -> bool:
+        n = len(pcm_bytes) & ~1
+        if n < 2:
+            return False
+        samples = array("h")
+        samples.frombytes(pcm_bytes[:n])
+        thr = LIVE_SILENCE_PEAK_THRESHOLD
+        for s in samples:
+            if s >= thr or s <= -thr:
+                return True
+        return False
+
+    def _cancel_pc_bridge_pull_task(self) -> None:
+        task = self._pc_bridge_pull_task
+        self._pc_bridge_pull_task = None
+        if task is not None and not task.done():
+            try:
+                cur = asyncio.current_task()
+            except RuntimeError:
+                cur = None
+            if cur is not task:
+                task.cancel()
+
+    async def start_live_stream(self, source: str = "web_cast", label: str = "", client_ip: str = "") -> int:
+        """Kích hoạt chế độ Loa Không Dây (Last-Sender Wins): tự dừng Jukebox cũ và chuyển ESP32 sang Low-Latency."""
+        self._ensure_persisted_loaded()
+        self._live_gen += 1
+        my_gen = self._live_gen
+        if source != "pc_loopback":
+            self._cancel_pc_bridge_pull_task()
+
+        self._source_revision += 1
+        self._flush_revision += 1
+        if self._source is not None:
+            try:
+                await self._source.close()
+            except Exception:
+                pass
+            self._source = None
+            self._source_track_id = None
+
+        self._live_pcm_buffer.clear()
+        self._reset_fade()
+        self.dsp.reset()
+        self.dsp.configure_norm(
+            enabled=self._norm_enabled,
+            track_gain=1.0,
+            has_track_gain=False,
+            reset_agc=True,
+        )
+
+        now = time.time()
+        clean_src = str(source or "web_cast").strip() or "web_cast"
+        clean_lbl = str(label or "").strip()[:100] or "📡 Loa Không Dây WebSocket"
+        self.live_stream_active = True
+        self.live_stream_paused = False
+        self.live_stream_source = clean_src
+        self.live_stream_label = clean_lbl
+        self.live_stream_client_ip = str(client_ip or "").strip()
+        self.live_stream_started_at = now
+        self.live_stream_last_frame_at = now
+        self.live_stream_last_audible_at = now
+        self._paused_at = 0.0
+        self.loading_query = ""
+        self.last_error = ""
+        self.status = "playing"
+        self.current_track = {
+            "video_id": "__live_ws__",
+            "source": clean_src,
+            "title": clean_lbl,
+            "uploader": f"Live WebSocket ({self.live_stream_client_ip or 'LAN'})",
+            "duration": 0,
+            "live": True,
+            "started_at": now,
+        }
+
+        self.push_ws_control({"type": "latency_mode", "low_latency": True})
+        self.push_ws_control({"type": "audio_reset", "reason": "live_start", "video_id": "__live_ws__"})
+        self.push_ws_control({
+            "type": "state",
+            "status": self.status,
+            "volume": self.volume,
+            "video_id": "__live_ws__",
+        })
+        self._signal_wake()
+        self.publish_update()
+        logger.info(f"📡 [Live Speaker] Bắt đầu '{clean_lbl}' (source={clean_src}, ip={self.live_stream_client_ip or '—'})")
+        return my_gen
+
+    def push_live_pcm(self, pcm_bytes: bytes, live_gen: Optional[int] = None) -> bool:
+        """Nhận khối PCM 24kHz s16le mono từ WebSocket nguồn Live; trả False nếu phiên đã bị chiếm/tắt."""
+        if not self.live_stream_active:
+            return False
+        if live_gen is not None and live_gen != self._live_gen:
+            return False
+        if not pcm_bytes:
+            return True
+
+        now = time.time()
+        self.live_stream_last_frame_at = now
+        if self._is_pcm_chunk_audible(pcm_bytes):
+            self.live_stream_last_audible_at = now
+        if self.live_stream_paused:
+            return True
+
+        even_len = len(pcm_bytes) & ~1
+        if even_len <= 0:
+            return True
+        self._live_pcm_buffer.extend(pcm_bytes[:even_len])
+        if len(self._live_pcm_buffer) > LIVE_BUFFER_MAX_BYTES:
+            drop = (len(self._live_pcm_buffer) - LIVE_BUFFER_TRIM_TO_BYTES) & ~1
+            if drop > 0:
+                del self._live_pcm_buffer[:drop]
+        self._signal_wake()
+        return True
+
+    async def stop_live_stream(self, live_gen: Optional[int] = None, reason: str = "stop") -> Dict[str, Any]:
+        """Dừng chế độ Loa Không Dây (nếu `live_gen` khớp) và trả ESP32 về buffer tiêu chuẩn."""
+        if live_gen is not None and live_gen != self._live_gen:
+            return self.get_status_snapshot()
+
+        self._live_gen += 1
+        self._cancel_pc_bridge_pull_task()
+        was_active = self.live_stream_active
+        self.live_stream_active = False
+        self.live_stream_paused = False
+        self.live_stream_source = ""
+        self.live_stream_label = ""
+        self.live_stream_client_ip = ""
+        self.live_stream_started_at = 0.0
+        self.live_stream_last_frame_at = 0.0
+        self.live_stream_last_audible_at = 0.0
+        self._live_pcm_buffer.clear()
+
+        if self.current_track and self.current_track.get("video_id") == "__live_ws__":
+            self.current_track = None
+            self.status = "stopped"
+            self._paused_at = 0.0
+
+        if was_active:
+            self._flush_revision += 1
+            self.dsp.reset()
+            self.push_ws_control({"type": "latency_mode", "low_latency": False})
+            self.push_ws_control({"type": "audio_reset", "reason": f"live_{reason}"})
+            self.push_ws_control({"type": "state", "status": self.status, "volume": self.volume})
+            self._signal_wake()
+            self.publish_update()
+            logger.info(f"📡 [Live Speaker] Đã dừng ({reason}).")
+        return self.get_status_snapshot()
+
+    async def _run_pc_bridge_pull_loop(self, session: aiohttp.ClientSession, ws: Any, my_gen: int) -> None:
+        stop_reason = "pc_bridge_closed"
+        try:
+            async for msg in ws:
+                if my_gen != self._live_gen or not self.live_stream_active:
+                    stop_reason = "preempted"
+                    break
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    if not self.push_live_pcm(msg.data, live_gen=my_gen):
+                        stop_reason = "preempted"
+                        break
+                elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                    break
+        except asyncio.CancelledError:
+            stop_reason = "cancelled"
+        except Exception as e:
+            logger.debug(f"PC Bridge Live WS loop kết thúc: {type(e).__name__}: {e}")
+        finally:
+            for obj in (ws, session):
+                try:
+                    await obj.close()
+                except Exception:
+                    pass
+            if my_gen == self._live_gen and self.live_stream_active:
+                await self.stop_live_stream(live_gen=my_gen, reason=stop_reason)
+
+    async def start_pc_bridge_live_stream(self, preferred_ip: str = "") -> Dict[str, Any]:
+        """Kết nối WebSocket tới PC Bridge (:8091/live_audio/ws), ưu tiên đúng IP PC đang thao tác."""
+        candidates: List[str] = []
+        clean_ip = str(preferred_ip or "").strip()
+        if clean_ip:
+            try:
+                addr = ipaddress.ip_address(clean_ip)
+                if addr.is_private and not addr.is_loopback:
+                    candidates.append(f"http://{clean_ip}:8091")
+            except ValueError:
+                pass
+
+        default_ep = _get_music_dl_endpoint()
+        if default_ep and default_ep not in candidates:
+            candidates.append(default_ep)
+        if not candidates:
+            raise ValueError("Chưa cấu hình hoặc chưa thấy PC Bridge (:8091) đang bật trên mạng LAN.")
+
+        self._cancel_pc_bridge_pull_task()
+        session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, connect=2.0))
+        ws = None
+        chosen_base = ""
+        last_err: Optional[Exception] = None
+        for base in candidates:
+            if base.startswith("https://"):
+                ws_base = "wss://" + base[len("https://"):]
+            elif base.startswith("http://"):
+                ws_base = "ws://" + base[len("http://"):]
+            else:
+                ws_base = "ws://" + base
+            ws_url = f"{ws_base}/live_audio/ws"
+            try:
+                ws = await session.ws_connect(ws_url, headers=_get_music_dl_headers(), heartbeat=15.0)
+                chosen_base = base
+                break
+            except Exception as e:
+                last_err = e
+
+        if ws is None:
+            await session.close()
+            raise RuntimeError(
+                f"Không kết nối được Live Audio WS trên {', '.join(candidates)}: "
+                f"{type(last_err).__name__}: {last_err}"
+            ) from last_err
+
+        host_label = urlparse(chosen_base).hostname or "PC"
+        my_gen = await self.start_live_stream(
+            source="pc_loopback",
+            label=f"💻 Âm thanh Windows ({host_label})",
+            client_ip=host_label,
+        )
+        task = asyncio.create_task(self._run_pc_bridge_pull_loop(session, ws, my_gen))
+        self._pc_bridge_pull_task = task
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return self.get_status_snapshot()
+
     async def play_track(self, track: Dict[str, Any], reset_audio: bool = True) -> Dict[str, Any]:
         self._ensure_persisted_loaded()
+        if self.live_stream_active:
+            await self.stop_live_stream(reason="track_change")
         self._source_revision += 1
         if reset_audio:
             self._flush_revision += 1
@@ -3666,6 +3936,18 @@ class ESP32AudioManager:
         return task
 
     async def pause(self) -> Dict[str, Any]:
+        if self.live_stream_active:
+            if not self.live_stream_paused:
+                self.live_stream_paused = True
+                self._live_pcm_buffer.clear()
+                self._flush_revision += 1
+                self.status = "paused"
+                self._paused_at = time.time()
+                self.push_ws_control({"type": "audio_reset", "reason": "pause"})
+                self.push_ws_control({"type": "state", "status": self.status, "volume": self.volume})
+                self._signal_wake()
+                self.publish_update()
+            return self.get_status_snapshot()
         if self.status == "playing":
             self._flush_revision += 1
             self.status = "paused"
@@ -3677,6 +3959,24 @@ class ESP32AudioManager:
         return self.get_status_snapshot()
 
     async def resume(self) -> Dict[str, Any]:
+        if self.live_stream_active:
+            if self.live_stream_paused or self.status != "playing":
+                self._reset_fade()
+                self._paused_at = 0.0
+                self.live_stream_paused = False
+                now = time.time()
+                self.live_stream_last_frame_at = now
+                self.live_stream_last_audible_at = now
+                self.status = "playing"
+                self.push_ws_control({
+                    "type": "state",
+                    "status": self.status,
+                    "volume": self.volume,
+                    "video_id": "__live_ws__",
+                })
+                self._signal_wake()
+                self.publish_update()
+            return self.get_status_snapshot()
         if self.status == "paused" and self.current_track:
             self._reset_fade()
             self._paused_at = 0.0
@@ -3702,6 +4002,8 @@ class ESP32AudioManager:
         return await self.resume()
 
     async def stop(self) -> Dict[str, Any]:
+        if self.live_stream_active:
+            return await self.stop_live_stream(reason="stop")
         self._source_revision += 1
         self._flush_revision += 1
         self.status = "stopped"
@@ -3953,46 +4255,68 @@ class ESP32AudioManager:
         """Đọc, lọc DSP 60Hz+Bass/Treble, áp fade mượt và trộn 1 khung PCM 20ms (960 bytes)."""
         self._ensure_persisted_loaded()
         for _ in range(3):
-            cur_playing = (self.status == "playing" and self.current_track is not None)
             music_frame: Optional[bytes] = None
-            if cur_playing:
-                src = await self._ensure_active_source()
-                if src is None:
-                    consec_empty += 1
-                    if consec_empty >= 2:
-                        logger.warning("🎵 [Jukebox] Nguồn phát lỗi/không mở được liên tiếp -> tạm dừng để tránh lặp.")
-                        if not self.last_error:
-                            self.last_error = "Không thể mở hoặc giải mã nguồn phát nhạc."
-                        if self.status != "stopped":
-                            await self.stop()
-                        break
-                    if self.status == "playing" and self.current_track is not None:
-                        continue
-                else:
-                    music_frame = await src.read_frame()
-                    if music_frame is None:
-                        await src.close()
-                        self._source = None
-                        self._source_track_id = None
+            if self.live_stream_active:
+                now = time.time()
+                if (
+                    self.live_stream_last_audible_at > 0
+                    and (now - self.live_stream_last_audible_at) >= LIVE_AUDIO_SILENCE_TIMEOUT_SEC
+                ):
+                    await self.stop_live_stream(reason="silence_timeout")
+                    break
+                if (
+                    not self.live_stream_paused
+                    and self.live_stream_last_frame_at > 0
+                    and (now - self.live_stream_last_frame_at) >= LIVE_AUDIO_IDLE_STALE_SEC
+                ):
+                    await self.stop_live_stream(reason="stream_idle_timeout")
+                    break
+                if not self.live_stream_paused and len(self._live_pcm_buffer) >= FRAME_BYTES:
+                    raw_live = bytes(self._live_pcm_buffer[:FRAME_BYTES])
+                    del self._live_pcm_buffer[:FRAME_BYTES]
+                    music_frame = self.dsp.process_pcm16(raw_live)
+                    music_frame = self._apply_fade_to_frame(music_frame)
+                consec_empty = 0
+            else:
+                cur_playing = (self.status == "playing" and self.current_track is not None)
+                if cur_playing:
+                    src = await self._ensure_active_source()
+                    if src is None:
                         consec_empty += 1
                         if consec_empty >= 2:
-                            logger.warning("🎵 [Jukebox] Nguồn phát kết thúc liên tiếp -> tạm dừng để tránh lặp.")
-                            await self.stop()
+                            logger.warning("🎵 [Jukebox] Nguồn phát lỗi/không mở được liên tiếp -> tạm dừng để tránh lặp.")
+                            if not self.last_error:
+                                self.last_error = "Không thể mở hoặc giải mã nguồn phát nhạc."
+                            if self.status != "stopped":
+                                await self.stop()
                             break
-                        sess_active = bool(self.timed_session and float(self.timed_session.get("ends_at") or 0) > time.time())
-                        if self.queue:
-                            nxt = self.queue.pop(0)
-                            await self.play_track(nxt, reset_audio=False)
-                        elif self.auto_dj or sess_active:
-                            cur_vid = self.current_track.get("video_id") if self.current_track else None
-                            await self._start_from_cache_or_queue(exclude_vid=cur_vid, reset_audio=False)
-                        else:
-                            await self.stop()
-                        continue
-                    consec_empty = 0
-                    music_frame = _pad_pcm_frame(music_frame)
-                    music_frame = self.dsp.process_pcm16(music_frame)
-                    music_frame = self._apply_fade_to_frame(music_frame)
+                        if self.status == "playing" and self.current_track is not None:
+                            continue
+                    else:
+                        music_frame = await src.read_frame()
+                        if music_frame is None:
+                            await src.close()
+                            self._source = None
+                            self._source_track_id = None
+                            consec_empty += 1
+                            if consec_empty >= 2:
+                                logger.warning("🎵 [Jukebox] Nguồn phát kết thúc liên tiếp -> tạm dừng để tránh lặp.")
+                                await self.stop()
+                                break
+                            sess_active = bool(self.timed_session and float(self.timed_session.get("ends_at") or 0) > time.time())
+                            if self.queue:
+                                nxt = self.queue.pop(0)
+                                await self.play_track(nxt, reset_audio=False)
+                            elif self.auto_dj or sess_active:
+                                cur_vid = self.current_track.get("video_id") if self.current_track else None
+                                await self._start_from_cache_or_queue(exclude_vid=cur_vid, reset_audio=False)
+                            else:
+                                await self.stop()
+                            continue
+                        consec_empty = 0
+                        music_frame = _pad_pcm_frame(music_frame)
+                        music_frame = self.dsp.process_pcm16(music_frame)
+                        music_frame = self._apply_fade_to_frame(music_frame)
 
             voice_frame: Optional[bytes] = None
             if self._voice_pcm_buffer:
@@ -4127,7 +4451,8 @@ class ESP32AudioManager:
                     continue
 
                 if was_idle:
-                    next_tick = time.monotonic() - OPUS_PREFILL_LEAD_SEC
+                    lead = LIVE_OPUS_PREFILL_LEAD_SEC if self.live_stream_active else OPUS_PREFILL_LEAD_SEC
+                    next_tick = time.monotonic() - lead
                     was_idle = False
                     encoder.reset()
                     seen_flush_rev = self._flush_revision
@@ -4135,13 +4460,32 @@ class ESP32AudioManager:
                 pcm_acc = bytearray()
                 start_flush_rev = self._flush_revision
                 start_playing = is_playing
-                for _ in range(OPUS_PCM_FRAMES_PER_PKT):
+                live_wait_tries = 0
+                while len(pcm_acc) < OPUS_FRAME_BYTES:
                     frame, consec_empty = await self._read_next_mixed_pcm_frame(consec_empty)
-                    if frame is None:
-                        break
-                    pcm_acc.extend(frame)
-                    if self._flush_revision != start_flush_rev:
-                        break
+                    if frame is not None:
+                        pcm_acc.extend(frame)
+                        if self._flush_revision != start_flush_rev:
+                            break
+                        continue
+                    if (
+                        self.live_stream_active
+                        and not self.live_stream_paused
+                        and not self._voice_pcm_buffer
+                        and _session_alive()
+                        and self._flush_revision == start_flush_rev
+                        and live_wait_tries < 4
+                    ):
+                        live_wait_tries += 1
+                        self._wake_event.clear()
+                        if len(self._live_pcm_buffer) >= FRAME_BYTES or self._voice_pcm_buffer or not self.live_stream_active or self.live_stream_paused or not _session_alive():
+                            continue
+                        try:
+                            await asyncio.wait_for(self._wake_event.wait(), timeout=0.025)
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
+                    break
 
                 if not _session_alive():
                     break
@@ -4153,7 +4497,16 @@ class ESP32AudioManager:
                     continue
 
                 if not pcm_acc:
-                    await asyncio.sleep(0.02)
+                    if self.live_stream_active and not self._voice_pcm_buffer:
+                        self._wake_event.clear()
+                        if len(self._live_pcm_buffer) < FRAME_BYTES and _session_alive() and self.live_stream_active:
+                            try:
+                                await asyncio.wait_for(self._wake_event.wait(), timeout=0.25)
+                            except asyncio.TimeoutError:
+                                pass
+                        was_idle = True
+                    else:
+                        await asyncio.sleep(0.02)
                     continue
 
                 # Nếu người dùng vừa pause/stop ngay giữa khung 60ms thì bỏ phần dư (ESP32 đã nhận audio_reset)
@@ -4176,6 +4529,7 @@ class ESP32AudioManager:
                     last_seen_bump = now_m
                     self.mark_esp32_seen(ip=client_ip)
 
+                lead_now = LIVE_OPUS_PREFILL_LEAD_SEC if self.live_stream_active else OPUS_PREFILL_LEAD_SEC
                 next_tick += OPUS_FRAME_MS / 1000.0
                 delay = next_tick - time.monotonic()
                 if delay > 0.005:
@@ -4190,8 +4544,8 @@ class ESP32AudioManager:
                         pass
                     if self._flush_revision != seen_flush_rev or (self.status != "playing" and not self._voice_pcm_buffer):
                         was_idle = True
-                elif delay < -(OPUS_PREFILL_LEAD_SEC + 0.30):
-                    next_tick = time.monotonic() - (OPUS_PREFILL_LEAD_SEC * 0.8)
+                elif delay < -(lead_now + 0.25):
+                    next_tick = time.monotonic() - (lead_now * 0.8)
         finally:
             encoder.close()
             await self._close_source_if_idle()
@@ -5045,7 +5399,16 @@ async def execute_music_command_dict(
         return f"[HỆ THỐNG LOA PHÒNG: Đã điều chỉnh âm lượng loa thành {v}%.]"
 
     if act == "sleep_timer":
-        mins = _safe_int(cmd.get("minutes") if cmd.get("minutes") is not None else cmd.get("duration_minutes"), 0) or 0
+        raw_st = (
+            cmd.get("minutes")
+            if cmd.get("minutes") is not None
+            else (
+                cmd.get("duration_minutes")
+                if cmd.get("duration_minutes") is not None
+                else cmd.get("delay_minutes")
+            )
+        )
+        mins = _safe_int(raw_st, 0) or 0
         if mins <= 0:
             return ""
         mgr.set_sleep_timer(mins)
@@ -5061,11 +5424,14 @@ async def execute_ai_music_action(ai_action: Any, *, event_source: str = "user_t
     act = str(ai_action.get("action") or "").strip().lower()
     if not act or act == "null":
         return ""
+    dur_val = ai_action.get("duration_minutes")
+    if dur_val is None:
+        dur_val = ai_action.get("minutes")
     normalized: Dict[str, Any] = {
         "action": act,
         "query": ai_action.get("query") or "",
-        "minutes": ai_action.get("duration_minutes"),
-        "duration_minutes": ai_action.get("duration_minutes"),
+        "minutes": dur_val,
+        "duration_minutes": dur_val,
         "delay_minutes": ai_action.get("delay_minutes"),
         "time_str": ai_action.get("alarm_time_vn") or "",
         "tomorrow": bool(ai_action.get("tomorrow")),

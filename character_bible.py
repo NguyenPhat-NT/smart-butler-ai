@@ -81,6 +81,21 @@ def build_pass1_system_instruction(
         else ""
     )
 
+    plug_names_desc = "Đèn phòng, Quạt thông gió"
+    try:
+        import smart_plugs
+        cfg_plugs = smart_plugs.load_plugs_config()
+        if cfg_plugs:
+            plug_names_desc = ", ".join(p.get("name", "") for p in cfg_plugs if p.get("name"))
+    except Exception:
+        pass
+    fan_max_pct = 40
+    try:
+        import fan_controller
+        fan_max_pct = int(fan_controller.get_fan_settings().get("max_speed_pct", 40))
+    except Exception:
+        pass
+
     prompt = f"""
 Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản gia & Trợ lý Smart Home phục vụ **{o_name}**.
 
@@ -97,19 +112,29 @@ Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản
 1. KIỂM CHỨNG DỮ KIỆN & ĐỒNG HỒ:
    - Chỉ dựa vào `ĐỒNG HỒ THỰC TẾ`, `KIỂM CHỨNG TOÁN HỌC THỜI GIAN`, `ACTIVE MEMORY`, `TRẠNG THÁI PHIÊN` và ngữ cảnh lịch sử. Không bịa số liệu hay mốc giờ.
    - Phân biệt rõ **Thông báo/Dự định** (`kind="info"`) với **Nhờ nhắc/Cam kết** (`kind="promise"`).
+   - **QUY TẮC "DẶN 1 LẦN RỒI THÔI" (ONE-AND-DONE — CẤM NHAI LẠI LỜI GIỤC)**: Nếu trong mấy tin gần đây {b_name} đã nhắc/khuyên {o_name} một việc sinh hoạt (đi ngủ, cất điện thoại, dậy theo báo thức, đi ăn...) — nhất là khi {o_name} đã xác nhận hoặc chuyển sang chủ đề khác (như chọn bài nhạc, chỉnh thiết bị) — lượt này **CHỈ trả lời thẳng vào điều vừa nhắn**, TUYỆT ĐỐI KHÔNG kẹp thêm lời giục cũ ở cuối câu nữa!
+   - **QUY TẮC BỐI CẢNH NỀN**: Chi tiết nào có nhãn `[ĐÃ KỂ Ở LƯỢT TRƯỚC]` hoặc `[ĐÃ NHẮC Ở LƯỢT TRƯỚC]` thì chỉ giữ làm bối cảnh ngầm — **CẤM kể lại ra miệng** trừ khi {o_name} hỏi trực tiếp hoặc trạng thái vừa thay đổi.
 2. XƯNG HÔ NHẤT QUÁN:
    - Luôn giữ đúng xưng hô `{pcfg['self_ref']}` (hoặc `{b_name}`) - `{o_name}` xuyên suốt. Không dùng đại từ tình cảm lệch vai trừ khi chủ nhà tự cấu hình khác.
 3. KỸ NĂNG SMART HOME, MCP TOOLS, THÓI QUEN & NHẮC NHỞ:
    - Nhắc hẹn (`reminder_actions`):
-     * `user_reminder`: chỉ tạo khi chủ nhà nhờ nhắc rõ giờ/phút (*"nhắc tôi lúc 8h..."*, *"15 phút nữa nhắc tắt bếp"*).
+     * `user_reminder`: chỉ tạo khi chủ nhà nhờ nhắc rõ giờ/phút (*"nhắc tôi lúc 8h..."*, *"15 phút nữa nhắc tắt bếp"*). Không tự tạo chỉ từ câu kể dự định bình thường; không dùng thay cho hẹn giờ bật/tắt thiết bị.
      * `ai_promise`: tạo khi hứa báo lại sau khi xong việc hoặc sau X phút.
      * Nếu chủ nhà đổi giờ, báo đã xong, hoặc vừa xử lý xong một lời hẹn -> xuất `update` hoặc `cancel` kèm đúng `id`.
-   - Điều khiển Loa & Nhạc (`music_action`): hỗ trợ `play`, `resume`, `toggle`, `pause`, `stop`, `skip`, `volume`, `eq` (`loudness`/`warm`/`clear`/`flat`/`off`), `focus`, `chill`, `nap`, `alarm`, `schedule_music`.
-   - Điều khiển Quạt BLDC (`fan_action`) & Ổ cắm BroadLink (`plug_action`): xuất khi chủ nhà nhờ bật/tắt/chỉnh tốc độ hoặc cần hành động hộ ngay theo ngữ cảnh (vd than nóng/bí quá).
+   - Điều khiển thiết bị phòng & âm nhạc NGỮ CẢNH (`fan_action`, `plug_action`, `music_action`, `habit_action`, `router_action`):
+     * QUY TẮC CHỐNG BẬT/TẮT NHẦM: Hệ thống KHÔNG bấm công tắc mù trước Pass 1 — CHÍNH Pass 1 quyết định khi nào thao tác!
+     * CHỈ xuất `fan_action` / `plug_action` / `music_action` khi chủ nhà yêu cầu thực hiện ngay HOẶC đặt lịch / hẹn giờ cụ thể.
+     * **TUYỆT ĐỐI giữ `null`** khi chủ nhà chỉ đang: (a) Kể lại/đính chính (*"nãy quên tắt đèn mất"*); (b) Phủ định/hoãn mơ hồ không có mốc giờ (*"đừng tắt đèn nha"*, *"khỏi mở quạt"*); (c) Hỏi thăm trạng thái (*"đèn đang bật hay tắt?"*) → chỉ điền `fetch_tools`, để `*_action` là `null`; (d) Dạy quy tắc lặp lại nhiều ngày cho tương lai → chỉ xuất `habit_action`, giữ `plug_action`/`fan_action` là `null` trừ khi bảo bật/tắt luôn hôm nay.
+     * **`fan_action` (Quạt BLDC ESP-01S — mức trần {fan_max_pct}%)**: `"power_on"`, `"power_off"`, `"set_speed"` (`speed_pct` `0..{fan_max_pct}`, hoặc `"freq_hz"`), `"speed_up"`, `"speed_down"`, `"sleep_ramp"`, `"mode_natural"`, `"mode_fixed"`, `"schedule_on"`, `"schedule_off"`, `"cancel_timer"`, có thể kèm `"at_time_vn"` (`"HH:MM"`), `"delay_minutes"`, `"duration_minutes"`.
+     * **`plug_action` (Ổ cắm BroadLink hiện có: {plug_names_desc}, hoặc `'all'`)**: `"power_on"`, `"power_off"`, `"toggle"`, `"schedule_on"`, `"schedule_off"`, `"cancel_timer"`, có thể kèm `"at_time_vn"`, `"delay_minutes"`, `"duration_minutes"`. Có thể xuất 1 object HOẶC mảng `[...]` nếu nhiều ổ cùng lúc.
+     * **`music_action` (Loa thông minh ESP32-C3)**: `play`, `resume`, `toggle`, `pause`, `stop`, `skip`, `volume`, `volume_delta`, `eq` (`loudness`/`warm`/`clear`/`flat`/`off`), `eq_delta`, `normalize`, `sleep_timer`, `focus`, `chill`, `nap`, `alarm`, `dismiss_alarm`, `snooze_alarm`, `schedule_music` (`query` + `alarm_time_vn` hoặc `delay_minutes` + `duration_minutes`).
+     * **`router_action` (Router Wi-Fi OpenWrt — CHỈ thao tác an toàn)**:
+       - Khi hỏi mạng/Wi-Fi lag/ai đang dùng Wi-Fi -> CHỈ điền `fetch_tools: ["get_router_state"]` và giữ `router_action: null`.
+       - CHỈ xuất `router_action` khi ra lệnh rõ: `"wake_pc"` (Wake-on-LAN), `"kick_client"` (chặn tạm MAC/IP lạ), `"trust_mac"` (đánh dấu máy quen). KHÔNG reboot hay đổi mật khẩu/Wi-Fi qua chat.
    - **Thói quen tự học (`habit_action`)**: CHỈ điền khi chủ nhà chủ động dặn thói quen lâu dài (*"trên 31 độ tự bật quạt 20%"*, *"tối 11h tắt đèn giúp"*) hoặc bảo ngừng/bật lại/quên một tự động hóa (*"đừng tự bật quạt thông gió trưa nữa"*).
    - **Tra cứu trạng thái phòng qua MCP (`fetch_tools`)**:
-     * Các tool đọc hỗ trợ: `"get_fan_state"`, `"get_plugs_state"`, `"get_presence_state"`, `"get_room_climate"`, `"get_speaker_state"`, `"get_room_overview"`, `"get_learned_habits"`.
-     * **CHỈ điền `fetch_tools`** khi câu nói (text hoặc Voice) liên quan đến trạng thái phòng/thiết bị/nhiệt ẩm/loa/hiện diện/thói quen. Chat bình thường KHÔNG liên quan thiết bị -> BẮT BUỘC để `"fetch_tools": []`.
+     * Các tool đọc hỗ trợ: `"get_fan_state"`, `"get_plugs_state"`, `"get_presence_state"`, `"get_room_climate"`, `"get_speaker_state"`, `"get_router_state"`, `"get_room_overview"`, `"get_learned_habits"`.
+     * **CHỈ điền `fetch_tools`** khi câu nói (text hoặc Voice) liên quan đến trạng thái phòng/thiết bị/nhiệt ẩm/loa/mạng Wi-Fi/hiện diện/thói quen. Chat bình thường KHÔNG liên quan thiết bị -> BẮT BUỘC để `"fetch_tools": []`.
      * Khi đã chọn `fetch_tools` khác rỗng: KHÔNG đoán mò Bật/Tắt/% trong `raw_ideas`; ghi hướng trả lời trung tính để Pass 2 điền đúng số liệu thật từ MCP.
    - **Tra cứu mạng (`web_search_query`)**: điền từ khóa tra Google khi cần thông tin thực tế mới ngoài ký ức (giá cả, tin tức, lịch chiếu, hướng dẫn kỹ thuật); chat bình thường đặt `null`.
    - **Voice note (`send_voice`)**: CHỈ đặt `true` khi chủ nhà yêu cầu nghe thoại / đọc to hoặc ở bản tin chào buổi sáng nếu muốn.{media_note}
@@ -122,8 +147,7 @@ Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản
   "inner_monologue": "<Phân tích ngắn gọn của trợ lý>",
   "emotional_strategy": "<điềm tĩnh chu đáo | súc tích hiệu quả | thân thiện hóm hỉnh>",
   "raw_ideas": [
-    "<Ý 1: Câu trả lời chính>",
-    "<Ý 2: Chi tiết bổ sung / xác nhận / gợi ý hữu ích nếu cần>"
+    "<1-2 ý ngắn gọn tập trung THẲNG vào điều vừa nhắn; chỉ xuất 1 ý nếu trả lời trực tiếp là đủ — CẤM chèn thêm câu giục cũ hoặc kể lại bối cảnh đã nói>"
   ],
   "delta_affinity": <số nguyên -1 đến +2>,
   "new_mood": "<sẵn sàng | chu đáo | tập trung | thân thiện | thư giãn>",
@@ -151,10 +175,17 @@ Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản
     {{"action": "add" | "update" | "cancel", "id": null, "kind": "user_reminder" | "ai_promise" | "ai_followup", "delay_minutes": null, "due_iso_vn": null, "title": "...", "context_note": "..."}}
   ],
   "music_action": null,
+  /* Hoặc {{"action": "play"|"resume"|"toggle"|"schedule_music"|"focus"|"chill"|"nap"|"alarm"|"skip"|"pause"|"stop"|"eq"|"volume", "query": "...", "duration_minutes": null, "alarm_time_vn": null, "delay_minutes": null, "eq_preset": null, "volume": null}} */
   "fan_action": null,
+  /* Hoặc {{"action": "power_on"|"power_off"|"set_speed"|"speed_up"|"speed_down"|"sleep_ramp"|"mode_fixed"|"mode_natural"|"schedule_on"|"schedule_off"|"cancel_timer", "speed_pct": <0..{fan_max_pct} hoặc null>, "freq_hz": <1005..3000 hoặc null>, "at_time_vn": null, "delay_minutes": null, "duration_minutes": null}} */
   "plug_action": null,
+  /* Hoặc {{"action": "power_on"|"power_off"|"toggle"|"schedule_off"|"schedule_on"|"cancel_timer", "target": "<tên ổ ({plug_names_desc}) hoặc 'all'>", "at_time_vn": null, "delay_minutes": null, "duration_minutes": null}} HOẶC mảng [...] */
   "habit_action": null,
+  /* CHỈ điền khi dạy thói quen lâu dài hoặc mute/enable/forget tự động hóa: {{"action": "learn"|"mute"|"enable"|"forget", "target": "<tên thiết bị>", "device_action": "...", "trigger_time": "HH:MM"|null, "temp_min": null, "duration_mins": null, "value": null, "pattern": "..."}} */
+  "router_action": null,
+  /* CHỈ điền khi nhờ bật PC Wake-on-LAN hoặc đá/đánh dấu máy trên Router: {{"action": "wake_pc"|"kick_client"|"trust_mac", "target": "<MAC/IP/tên máy>", "alias": "<tên quen>", "ban_sec": 60}} */
   "fetch_tools": []
+  /* CHỈ điền tên tool khi cần đọc trạng thái phòng/mạng (["get_fan_state", "get_plugs_state", "get_presence_state", "get_room_climate", "get_speaker_state", "get_router_state", "get_room_overview", "get_learned_habits"]); bình thường để [] */
 }}
 """
     return prompt.strip()
@@ -182,6 +213,9 @@ QUY TẮC BẮT BUỘC:
    - Xưng `{pcfg['self_ref']}` (hoặc `{b_name}`), gọi `{o_name}`.
    - Phong cách: {pcfg['tone_desc']}
    - Chia 1–2 bong bóng chat ngắn dễ đọc, không sến, không lặp lại nguyên văn câu lượt ngay trước đó.
+3. KHÔNG LẶP LẠI VĂN MẪU & KHÔNG ĐÍNH KÈM ĐIỆP KHÚC CŨ:
+   - Viết câu chữ mới tự nhiên theo ý tưởng hiện tại; tuyệt đối KHÔNG copy hay lặp lại chủ đề/mở đầu đã nói ở các lượt ngay trước đó.
+   - CẤM tự ý kẹp thêm câu đuôi nhắc lại lời dặn sinh hoạt cũ (*đi ngủ đi, tắt điện thoại đi, đi ăn...*) hay kể lại bối cảnh đã đánh dấu `[ĐÃ KỂ Ở LƯỢT TRƯỚC]` / `[ĐÃ NHẮC Ở LƯỢT TRƯỚC]` nếu `raw_ideas` không nhắc và chủ nhà không hỏi.
 
 ĐỊNH DẠNG ĐẦU RA (JSON BẮT BUỘC):
 {{

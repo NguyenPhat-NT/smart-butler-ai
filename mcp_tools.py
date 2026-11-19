@@ -33,6 +33,7 @@ READ_TOOL_NAMES = (
     "get_speaker_state",
     "get_room_overview",
     "get_learned_habits",
+    "get_router_state",
 )
 
 
@@ -160,24 +161,82 @@ async def _tool_get_speaker_state(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def _tool_get_router_state(args: Dict[str, Any]) -> Dict[str, Any]:
+    import router_controller
+    ctrl = router_controller.get_controller()
+    snap = ctrl.get_status_snapshot()
+    refresh = bool(args.get("refresh", True))
+    if refresh and snap.get("enabled"):
+        last_at = float(snap.get("last_checked_at") or 0.0)
+        if not snap.get("online") or (time.time() - last_at) > 5.0:
+            try:
+                await asyncio.wait_for(ctrl.refresh_state(force=True), timeout=2.2)
+            except Exception:
+                pass
+            snap = ctrl.get_status_snapshot()
+    clients = []
+    for c in (snap.get("clients") or [])[:20]:
+        clients.append({
+            "label": c.get("label"),
+            "ip": c.get("ip"),
+            "mac": c.get("mac"),
+            "band": c.get("band"),
+            "ssid": c.get("ssid"),
+            "signal_dbm": c.get("signal_dbm"),
+            "rx_rate_mbps": c.get("rx_rate_mbps"),
+            "tx_rate_mbps": c.get("tx_rate_mbps"),
+            "rx_mb": c.get("rx_mb"),
+            "tx_mb": c.get("tx_mb"),
+            "is_known": bool(c.get("is_known")),
+        })
+    return {
+        "configured": bool(snap.get("configured")),
+        "enabled": bool(snap.get("enabled")),
+        "online": bool(snap.get("online")),
+        "model": snap.get("model") or "",
+        "firmware": snap.get("firmware") or "",
+        "uptime_text": snap.get("uptime_text") or "",
+        "load_1m": snap.get("load_1m"),
+        "ram_used_mb": snap.get("ram_used_mb"),
+        "ram_total_mb": snap.get("ram_total_mb"),
+        "ram_used_pct": snap.get("ram_used_pct"),
+        "conntrack_count": snap.get("conntrack_count"),
+        "wisp": snap.get("wisp"),
+        "uplinks": snap.get("uplinks") or [],
+        "radios": snap.get("radios") or [],
+        "clients_count": int(snap.get("clients_count") or 0),
+        "unknown_count": int(snap.get("unknown_count") or 0),
+        "clients": clients,
+        "last_error": snap.get("last_error") or "",
+    }
+
+
 async def _tool_get_room_overview(args: Dict[str, Any]) -> Dict[str, Any]:
     refresh = bool(args.get("refresh", True))
     sub_args = {"refresh": refresh}
-    fan_res, plugs_res, pres_res, cli_res, spk_res = await asyncio.gather(
+    import router_controller
+    r_enabled = router_controller.get_router_settings(mask_secret=True).get("enabled")
+    tasks = [
         _tool_get_fan_state(sub_args),
         _tool_get_plugs_state(sub_args),
         _tool_get_presence_state({}),
         _tool_get_room_climate({}),
         _tool_get_speaker_state({}),
-        return_exceptions=True,
-    )
-    return {
+    ]
+    if r_enabled:
+        tasks.append(_tool_get_router_state({"refresh": False}))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    fan_res, plugs_res, pres_res, cli_res, spk_res = results[:5]
+    out: Dict[str, Any] = {
         "presence": pres_res if isinstance(pres_res, dict) else {"error": str(pres_res)},
         "fan": fan_res if isinstance(fan_res, dict) else {"error": str(fan_res)},
         "plugs": plugs_res if isinstance(plugs_res, dict) else {"error": str(plugs_res)},
         "climate": cli_res if isinstance(cli_res, dict) else {"error": str(cli_res)},
         "speaker": spk_res if isinstance(spk_res, dict) else {"error": str(spk_res)},
     }
+    if r_enabled and len(results) > 5 and isinstance(results[5], dict):
+        out["router"] = results[5]
+    return out
 
 
 async def _tool_set_fan(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -208,9 +267,9 @@ async def _tool_set_plug(args: Dict[str, Any]) -> Dict[str, Any]:
         action = "power_on" if bool(args["power"]) else "power_off"
     note = await ctrl.execute_ai_plug_action(
         {
+            **args,
             "action": action,
             "target": target,
-            "delay_minutes": args.get("delay_minutes"),
         },
         event_source="user_mcp",
     )
@@ -254,6 +313,18 @@ async def _tool_manage_learned_habit(args: Dict[str, Any]) -> Dict[str, Any]:
     note = await asyncio.to_thread(habit_engine.execute_ai_habit_action, args)
     snap = habit_engine.get_habits_snapshot()
     return {"ok": bool(note), "note": note or "Không tìm thấy thói quen hoặc lệnh không hợp lệ.", **snap}
+
+
+async def _tool_control_router(args: Dict[str, Any]) -> Dict[str, Any]:
+    import router_controller
+    ctrl = router_controller.get_controller()
+    act = str(args.get("action") or "refresh").strip().lower()
+    if act in ("untrust", "untrust_mac"):
+        res = ctrl.untrust_mac(str(args.get("target") or ""))
+        return {**res, "router": await _tool_get_router_state({"refresh": False})}
+    note = await ctrl.execute_ai_router_action(args)
+    snap = await _tool_get_router_state({"refresh": False})
+    return {"ok": bool(note and "Từ chối" not in note and "không" not in note.lower()), "note": note or "Lệnh router không hợp lệ.", "router": snap}
 
 
 # ==================== MCP TOOL SCHEMA REGISTRY ====================
@@ -312,16 +383,19 @@ _TOOL_REGISTRY: List[Dict[str, Any]] = [
     },
     {
         "name": "set_fan",
-        "description": "Điều khiển Quạt BLDC ESP-01S (bật/tắt, chỉnh %/Hz trong trần cho phép, đổi chế độ gió, giảm dần đi ngủ).",
+        "description": "Điều khiển hoặc hẹn giờ Quạt BLDC ESP-01S (bật/tắt, chỉnh %/Hz trong trần cho phép, đổi chế độ gió, giảm dần đi ngủ, hẹn giờ bật/tắt/chạy N phút).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["power_on", "power_off", "set_speed", "speed_up", "speed_down", "sleep_ramp", "mode_fixed", "mode_natural"],
+                    "enum": ["power_on", "power_off", "set_speed", "speed_up", "speed_down", "sleep_ramp", "mode_fixed", "mode_natural", "schedule_on", "schedule_off", "cancel_timer"],
                 },
                 "speed_pct": {"type": "integer", "minimum": 0, "maximum": 100},
                 "freq_hz": {"type": "integer", "minimum": 1005, "maximum": 3000},
+                "at_time_vn": {"type": "string", "description": "Mốc giờ VN 'HH:MM' để hẹn bật/tắt (vd '22:00')."},
+                "delay_minutes": {"type": "number", "minimum": 1, "maximum": 1440},
+                "duration_minutes": {"type": "number", "minimum": 1, "maximum": 1440, "description": "Số phút chạy rồi tự tắt sau khi bật."},
             },
             "required": ["action"],
         },
@@ -335,10 +409,12 @@ _TOOL_REGISTRY: List[Dict[str, Any]] = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["power_on", "power_off", "toggle", "schedule_off", "schedule_on"],
+                    "enum": ["power_on", "power_off", "toggle", "schedule_off", "schedule_on", "cancel_timer"],
                 },
                 "target": {"type": "string", "description": "Tên ổ (vd 'Đèn phòng', 'Quạt thông gió', 'all') hoặc MAC."},
-                "delay_minutes": {"type": "integer", "minimum": 1, "maximum": 720},
+                "at_time_vn": {"type": "string", "description": "Mốc giờ VN 'HH:MM' để hẹn bật/tắt (vd '22:00')."},
+                "delay_minutes": {"type": "number", "minimum": 1, "maximum": 1440},
+                "duration_minutes": {"type": "number", "minimum": 1, "maximum": 1440, "description": "Số phút bật rồi tự tắt (vd bật trong 10p)."},
             },
             "required": ["action", "target"],
         },
@@ -430,6 +506,35 @@ _TOOL_REGISTRY: List[Dict[str, Any]] = [
         },
         "handler": _tool_manage_learned_habit,
     },
+    {
+        "name": "get_router_state",
+        "description": "Đọc trạng thái Router Wi-Fi OpenWrt (CPU/RAM/uptime, các đường mạng WWAN WISP & 4G MWAN3, thiết bị Wi-Fi đang kết nối & máy lạ).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "refresh": {"type": "boolean", "description": "Làm mới trực tiếp từ OpenWrt /ubus (mặc định true)."}
+            },
+        },
+        "handler": _tool_get_router_state,
+    },
+    {
+        "name": "control_router",
+        "description": "Thao tác an toàn trên Router OpenWrt: làm mới (refresh), bật PC từ xa bằng Wake-on-LAN (wake_pc), đánh dấu quen biết (trust_mac), hoặc ngắt thiết bị lạ ngoài whitelist (kick_client). KHÔNG cho phép reboot hay sửa cấu hình Wi-Fi.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["refresh", "wake_pc", "kick_client", "trust_mac", "untrust_mac"],
+                },
+                "target": {"type": "string", "description": "MAC, IP hoặc tên máy mục tiêu."},
+                "alias": {"type": "string", "description": "Tên gợi nhớ khi dùng trust_mac."},
+                "ban_sec": {"type": "integer", "minimum": 0, "maximum": 3600, "description": "Số giây chặn tạm sau khi kick_client."},
+            },
+            "required": ["action"],
+        },
+        "handler": _tool_control_router,
+    },
 ]
 
 _TOOL_MAP: Dict[str, Dict[str, Any]] = {t["name"]: t for t in _TOOL_REGISTRY}
@@ -474,6 +579,14 @@ _AI_TOOL_ALIASES = {
     "habits": "get_learned_habits",
     "habit": "get_learned_habits",
     "thoi_quen": "get_learned_habits",
+    "router": "get_router_state",
+    "router_state": "get_router_state",
+    "wifi": "get_router_state",
+    "mang": "get_router_state",
+    "network": "get_router_state",
+    "internet": "get_router_state",
+    "wan": "get_router_state",
+    "clients": "get_router_state",
 }
 
 
@@ -575,6 +688,35 @@ def format_ai_tool_results_block(tool_results: Dict[str, Dict[str, Any]]) -> str
         if sp.get("pc_now_playing"):
             lines.append(f"- Nhạc trên máy tính: Đang nghe \"{sp['pc_now_playing']}\"")
 
+    def _fmt_router(rt: Dict[str, Any]) -> None:
+        if not rt.get("configured") or not rt.get("enabled"):
+            lines.append("- Router Wi-Fi: Chưa kích hoạt kết nối quản lý")
+            return
+        if not rt.get("online"):
+            lines.append(f"- Router Wi-Fi: Không kết nối được ({rt.get('last_error') or 'offline'})")
+            return
+        uplink_parts: List[str] = []
+        for u in (rt.get("uplinks") or []):
+            st_u = u.get("mwan_status") or ("online" if u.get("up") else "offline")
+            extra_u = f" '{u['wisp_ssid']}' ({u['signal_dbm']} dBm)" if u.get("wisp_ssid") else ""
+            lat_u = f", {u['latency_ms']}ms" if u.get("latency_ms") is not None else ""
+            uplink_parts.append(f"{u.get('name')}: {st_u}{extra_u}{lat_u}")
+        uplink_txt = "; ".join(uplink_parts) if uplink_parts else "đang kiểm tra"
+        unknowns = [c for c in (rt.get("clients") or []) if not c.get("is_known")]
+        unk_txt = (
+            f"; có {len(unknowns)} máy lạ: " + ", ".join(f"{u.get('label')} ({u.get('band')})" for u in unknowns[:3])
+            if unknowns
+            else "; không có thiết bị lạ"
+        )
+        known_names = ", ".join(
+            f"{c.get('label')} ({c.get('band')})" for c in (rt.get("clients") or []) if c.get("is_known")
+        )
+        lines.append(
+            f"- Router Wi-Fi ({rt.get('model') or 'OpenWrt'}, bật {rt.get('uptime_text')}, tải {rt.get('load_1m')}, RAM {rt.get('ram_used_pct')}%): "
+            f"Đường mạng [{uplink_txt}]; tổng {rt.get('clients_count', 0)} máy đang vào Wi-Fi{unk_txt}"
+            + (f" [{known_names}]" if known_names else "")
+        )
+
     if "get_room_overview" in tool_results:
         ov = tool_results["get_room_overview"]
         if isinstance(ov.get("presence"), dict):
@@ -587,6 +729,8 @@ def format_ai_tool_results_block(tool_results: Dict[str, Dict[str, Any]]) -> str
             _fmt_climate(ov["climate"])
         if isinstance(ov.get("speaker"), dict):
             _fmt_speaker(ov["speaker"])
+        if isinstance(ov.get("router"), dict):
+            _fmt_router(ov["router"])
     else:
         if "get_presence_state" in tool_results:
             _fmt_presence(tool_results["get_presence_state"])
@@ -598,6 +742,8 @@ def format_ai_tool_results_block(tool_results: Dict[str, Dict[str, Any]]) -> str
             _fmt_climate(tool_results["get_room_climate"])
         if "get_speaker_state" in tool_results:
             _fmt_speaker(tool_results["get_speaker_state"])
+        if "get_router_state" in tool_results:
+            _fmt_router(tool_results["get_router_state"])
 
     if "get_learned_habits" in tool_results:
         hb_sum = str((tool_results["get_learned_habits"] or {}).get("summary") or "").strip()

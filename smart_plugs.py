@@ -27,6 +27,7 @@ import ctypes.util
 from typing import Any, Dict, List, Optional, Tuple
 
 import database
+import diary_helper
 import lan_events
 import lan_presence
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 VN_TZ = datetime.timezone(datetime.timedelta(hours=7))
 _PLUGS_META_KEY = "smart_plugs_v1"
+_PLUG_TIMERS_META_KEY = "smart_plug_timers_v1"
 
 BROADLINK_UDP_PORT = 80
 BROADLINK_TIMEOUT_SEC = 1.6
@@ -553,9 +555,45 @@ class SmartPlugController:
     def __init__(self) -> None:
         self._sessions: Dict[str, Dict[str, Any]] = {}  # mac -> {dev_id, key, ip}
         self._live: Dict[str, Dict[str, Any]] = {}      # mac -> {online, is_on, locked, last_error, checked_at, ip}
-        self._timers: Dict[str, Dict[str, Any]] = {}    # mac -> {action: "on"|"off", due_at: float}
+        self._timers: Dict[str, List[Dict[str, Any]]] = self._load_timers()  # mac -> [{action, due_at}]
         self._last_cmd_at: Dict[str, float] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
+
+    def _load_timers(self) -> Dict[str, List[Dict[str, Any]]]:
+        now_v = time.time()
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        try:
+            raw = database.get_metadata(_PLUG_TIMERS_META_KEY)
+            if not raw:
+                return out
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                for mac, items in parsed.items():
+                    nm = lan_presence.normalize_mac(mac)
+                    if not nm:
+                        continue
+                    rows = items if isinstance(items, list) else ([items] if isinstance(items, dict) else [])
+                    clean_rows: List[Dict[str, Any]] = []
+                    for it in rows:
+                        if not isinstance(it, dict):
+                            continue
+                        act = str(it.get("action") or "").lower()
+                        due = float(it.get("due_at") or 0.0)
+                        if act in ("on", "off") and due > (now_v - 7200.0):
+                            clean_rows.append({"action": act, "due_at": due})
+                    if clean_rows:
+                        clean_rows.sort(key=lambda x: x["due_at"])
+                        out[nm] = clean_rows[:8]
+        except Exception as e:
+            logger.debug(f"Lỗi nạp smart_plug_timers_v1: {e}")
+        return out
+
+    def _save_timers(self) -> None:
+        try:
+            clean = {mac: rows for mac, rows in self._timers.items() if rows}
+            database.set_metadata(_PLUG_TIMERS_META_KEY, json.dumps(clean, ensure_ascii=False))
+        except Exception as e:
+            logger.debug(f"Lỗi lưu smart_plug_timers_v1: {e}")
 
     def _get_lock(self, mac: str) -> asyncio.Lock:
         if mac not in self._locks:
@@ -793,16 +831,66 @@ class SmartPlugController:
             self.publish_update()
             return new_state
 
-    def schedule_timer(self, target_id: str, on: bool, delay_minutes: int) -> Optional[Dict[str, Any]]:
+    def schedule_timer(
+        self,
+        target_id: str,
+        on: bool,
+        delay_minutes: Optional[float] = None,
+        *,
+        due_at: Optional[float] = None,
+        append: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         plugs = self._find_plugs(target_id)
         if not plugs:
             return None
         plug = plugs[0]
-        mins = max(1, min(720, int(delay_minutes)))
-        due_at = time.time() + mins * 60.0
-        self._timers[plug["mac"]] = {"action": "on" if on else "off", "due_at": due_at}
+        if due_at is not None:
+            target_due = float(due_at)
+        else:
+            mins = max(1, min(1440, int(round(float(delay_minutes or 1)))))
+            target_due = time.time() + mins * 60.0
+        step = {"action": "on" if on else "off", "due_at": target_due}
+        mac = plug["mac"]
+        if append:
+            cur_list = list(self._timers.get(mac) or [])
+            cur_list.append(step)
+            cur_list.sort(key=lambda x: float(x.get("due_at") or 0.0))
+            self._timers[mac] = cur_list[:8]
+        else:
+            self._timers[mac] = [step]
+        self._save_timers()
         self.publish_update()
-        return {"mac": plug["mac"], "name": plug["name"], "action": "on" if on else "off", "due_at": due_at}
+        return {"mac": mac, "name": plug["name"], "action": step["action"], "due_at": target_due}
+
+    def schedule_sequence(
+        self,
+        target_id: str,
+        start_on: bool,
+        due_at: float,
+        duration_minutes: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Lên lịch bật/tắt ổ cắm tại `due_at` và tự tắt sau `duration_minutes` (nếu bật có thời lượng)."""
+        plugs = self._find_plugs(target_id)
+        if not plugs:
+            return None
+        plug = plugs[0]
+        mac = plug["mac"]
+        steps: List[Dict[str, Any]] = [{"action": "on" if start_on else "off", "due_at": float(due_at)}]
+        off_due: Optional[float] = None
+        if start_on and duration_minutes is not None and int(duration_minutes) > 0:
+            dur = max(1, min(720, int(duration_minutes)))
+            off_due = float(due_at) + dur * 60.0
+            steps.append({"action": "off", "due_at": off_due})
+        self._timers[mac] = steps
+        self._save_timers()
+        self.publish_update()
+        return {
+            "mac": mac,
+            "name": plug["name"],
+            "action": "on" if start_on else "off",
+            "due_at": float(due_at),
+            "off_due_at": off_due,
+        }
 
     def cancel_timer(self, target_id: str) -> bool:
         plugs = self._find_plugs(target_id)
@@ -810,6 +898,7 @@ class SmartPlugController:
             return False
         removed = self._timers.pop(plugs[0]["mac"], None) is not None
         if removed:
+            self._save_timers()
             self.publish_update()
         return removed
 
@@ -875,14 +964,19 @@ class SmartPlugController:
         for p in plugs:
             mac = p["mac"]
             live = self._live.get(mac, {})
-            tm = self._timers.get(mac)
-            timer_info = None
-            if tm and float(tm.get("due_at") or 0.0) > now_ts:
-                timer_info = {
+            raw_timers = self._timers.get(mac)
+            if isinstance(raw_timers, dict):
+                raw_timers = [raw_timers]
+            upcoming = [
+                {
                     "action": tm["action"],
                     "due_at": float(tm["due_at"]),
                     "remaining_sec": max(1, int(float(tm["due_at"]) - now_ts)),
                 }
+                for tm in sorted(raw_timers or [], key=lambda x: float(x.get("due_at") or 0.0))
+                if isinstance(tm, dict) and float(tm.get("due_at") or 0.0) > now_ts
+            ]
+            timer_info = upcoming[0] if upcoming else None
             out.append({
                 "mac": mac,
                 "ip": live.get("ip") or p.get("ip") or "",
@@ -900,6 +994,7 @@ class SmartPlugController:
                 "last_error": str(live.get("last_error") or ""),
                 "checked_at": float(live.get("checked_at") or 0.0),
                 "timer": timer_info,
+                "timers": upcoming[:5],
             })
         return out
 
@@ -975,9 +1070,26 @@ class SmartPlugController:
 
     async def tick_timers(self, now_ts: Optional[float] = None) -> None:
         now_v = float(now_ts if now_ts is not None else time.time())
-        due_items = [(mac, dict(tm)) for mac, tm in self._timers.items() if float(tm.get("due_at") or 0.0) <= now_v]
+        due_items: List[Tuple[str, Dict[str, Any]]] = []
+        changed = False
+        for mac in list(self._timers.keys()):
+            raw = self._timers.get(mac)
+            rows = [raw] if isinstance(raw, dict) else list(raw or [])
+            rows.sort(key=lambda x: float(x.get("due_at") or 0.0))
+            due_mac = [tm for tm in rows if isinstance(tm, dict) and float(tm.get("due_at") or 0.0) <= now_v]
+            rem_mac = [tm for tm in rows if isinstance(tm, dict) and float(tm.get("due_at") or 0.0) > now_v]
+            if due_mac:
+                changed = True
+                if rem_mac:
+                    self._timers[mac] = rem_mac
+                else:
+                    self._timers.pop(mac, None)
+                # Nếu cả bước bật & tắt cùng quá hạn trong 1 nhịp thì chạy bước cuối cùng hợp lệ
+                for tm in due_mac:
+                    due_items.append((mac, dict(tm)))
+
+        due_items.sort(key=lambda x: float(x[1].get("due_at") or 0.0))
         for mac, tm in due_items:
-            self._timers.pop(mac, None)
             want_on = tm.get("action") == "on"
             plugs = self._find_plugs(mac)
             if plugs:
@@ -990,11 +1102,29 @@ class SmartPlugController:
                         source="plugs",
                         speak_tts=False,
                     )
+        if changed:
+            self._save_timers()
             self.publish_update()
 
     # ==================== AI ACTION & NATURAL INTENT ====================
 
     async def execute_ai_plug_action(self, ai_action: Any, *, event_source: str = "user_telegram") -> str:
+        if isinstance(ai_action, list):
+            chunks: List[str] = []
+            for item in ai_action:
+                if not isinstance(item, dict):
+                    continue
+                sub = await self.execute_ai_plug_action(item, event_source=event_source)
+                if sub:
+                    inner = sub.strip()
+                    if inner.startswith("[Hệ thống Ổ cắm:") and inner.endswith("]"):
+                        inner = inner[len("[Hệ thống Ổ cắm:"):-1].strip().rstrip(".")
+                    if inner:
+                        chunks.append(inner)
+            if not chunks:
+                return ""
+            return "[Hệ thống Ổ cắm: " + "; ".join(chunks) + ".]"
+
         if not isinstance(ai_action, dict):
             return ""
         act = str(ai_action.get("action") or "").strip().lower()
@@ -1016,19 +1146,79 @@ class SmartPlugController:
                     parts.append(f"{p['name']}: đang {'BẬT' if st else 'TẮT'}")
             return "[Hệ thống Ổ cắm: " + "; ".join(parts) + ".]"
 
-        if act in ("schedule_off", "schedule_on"):
-            mins = ai_action.get("delay_minutes")
-            if mins is None:
+        at_time_raw = (
+            ai_action.get("at_time_vn")
+            or ai_action.get("alarm_time_vn")
+            or ai_action.get("start_time_vn")
+            or ai_action.get("due_iso_vn")
+        )
+        delay_raw = ai_action.get("delay_minutes") if ai_action.get("delay_minutes") is not None else ai_action.get("after_minutes")
+        dur_raw = (
+            ai_action.get("duration_minutes")
+            if ai_action.get("duration_minutes") is not None
+            else (
+                ai_action.get("duration_mins")
+                if ai_action.get("duration_mins") is not None
+                else (
+                    ai_action.get("for_minutes")
+                    if ai_action.get("for_minutes") is not None
+                    else ai_action.get("minutes")
+                )
+            )
+        )
+        dur_mins: Optional[int] = None
+        if dur_raw is not None and str(dur_raw).strip().lower() not in ("", "null", "none"):
+            try:
+                dm = int(round(float(dur_raw)))
+                if dm > 0:
+                    dur_mins = max(1, min(720, dm))
+            except (TypeError, ValueError):
+                pass
+
+        if act in ("cancel_timer", "cancel_schedule", "clear_timer"):
+            cancelled = [p["name"] for p in plugs if self.cancel_timer(p["mac"])]
+            if cancelled:
+                return f"[Hệ thống Ổ cắm: Đã hủy lịch hẹn cho {', '.join(cancelled)}.]"
+            return f"[Hệ thống Ổ cắm: Hiện chưa có lịch hẹn nào cho {', '.join(p['name'] for p in plugs)}.]"
+
+        scheduled_due = diary_helper.resolve_device_schedule_ts(at_time_vn=at_time_raw, delay_minutes=delay_raw)
+        is_sched_cmd = act in ("schedule_off", "schedule_on") or (
+            act in ("power_on", "on", "power_off", "off") and scheduled_due is not None
+        )
+        if is_sched_cmd:
+            if scheduled_due is None:
                 return ""
-            want_on = act == "schedule_on"
+            want_on = act in ("schedule_on", "power_on", "on")
             names: List[str] = []
+            off_due_ts: Optional[float] = None
             for p in plugs:
-                res = self.schedule_timer(p["mac"], want_on, int(mins))
+                res = self.schedule_sequence(
+                    p["mac"],
+                    want_on,
+                    scheduled_due,
+                    duration_minutes=(dur_mins if want_on else None),
+                )
                 if res:
                     names.append(res["name"])
+                    if res.get("off_due_at"):
+                        off_due_ts = float(res["off_due_at"])
             if not names:
                 return ""
-            return f"[Hệ thống Ổ cắm: Đã hẹn {int(mins)} phút nữa {'bật' if want_on else 'tắt'} {', '.join(names)}.]"
+            on_hm = datetime.datetime.fromtimestamp(scheduled_due, tz=VN_TZ).strftime("%H:%M")
+            target_txt = ", ".join(names)
+            if want_on and dur_mins and off_due_ts:
+                off_hm = datetime.datetime.fromtimestamp(off_due_ts, tz=VN_TZ).strftime("%H:%M")
+                return (
+                    f"[Hệ thống Ổ cắm: Đã lên lịch BẬT {target_txt} lúc {on_hm} "
+                    f"và TỰ TẮT sau {dur_mins} phút (lúc {off_hm}).]"
+                )
+            if delay_raw is not None and str(delay_raw).strip().lower() not in ("", "null", "none"):
+                try:
+                    d_i = max(1, int(round(float(delay_raw))))
+                    return f"[Hệ thống Ổ cắm: Đã hẹn {d_i} phút nữa {'bật' if want_on else 'tắt'} {target_txt} (lúc {on_hm}).]"
+                except (TypeError, ValueError):
+                    pass
+            return f"[Hệ thống Ổ cắm: Đã lên lịch {'BẬT' if want_on else 'TẮT'} {target_txt} lúc {on_hm}.]"
 
         if act in ("power_on", "on", "power_off", "off", "toggle"):
             results: List[str] = []
@@ -1041,6 +1231,14 @@ class SmartPlugController:
                 res = await self.set_power(p["mac"], want, reason="AI/Chat", event_source=event_source)
                 if res is None:
                     results.append(f"không kết nối được {p['name']}")
+                elif res and dur_mins:
+                    tm_res = self.schedule_timer(p["mac"], False, dur_mins, append=False)
+                    off_hm = (
+                        datetime.datetime.fromtimestamp(float(tm_res["due_at"]), tz=VN_TZ).strftime("%H:%M")
+                        if tm_res
+                        else ""
+                    )
+                    results.append(f"đã BẬT {p['name']} (hẹn tự TẮT sau {dur_mins} phút" + (f" lúc {off_hm})" if off_hm else ")"))
                 else:
                     results.append(f"đã {'BẬT' if res else 'TẮT'} {p['name']}")
             return "[Hệ thống Ổ cắm: " + "; ".join(results) + ".]"

@@ -71,9 +71,11 @@ _DEFAULT_RUNTIME: Dict[str, Any] = {
     "sleep_reask_date": "",
     "phone_away_since": 0.0,
     "phone_away_triggered": False,
+    "plugs_away_triggered": False,
     "last_phone_online": None,
     "last_cmd": None,
     "manual_override_until": 0.0,
+    "timers": [],
 }
 
 _FAN_KEYWORDS_RE = re.compile(r"\b(quạt|fan|gió\s*tự\s*nhiên|cố\s*định|1005\s*hz)\b", re.IGNORECASE)
@@ -206,8 +208,38 @@ def save_fan_settings(patch: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _normalize_fan_timers(raw: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        act = str(item.get("action") or "").strip().lower()
+        try:
+            due_at = float(item.get("due_at") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if act not in ("on", "off", "set_speed") or due_at <= 0:
+            continue
+        entry: Dict[str, Any] = {
+            "action": act,
+            "due_at": due_at,
+            "created_at": float(item.get("created_at") or 0.0),
+        }
+        if item.get("speed_pct") is not None:
+            try:
+                entry["speed_pct"] = int(item["speed_pct"])
+            except (TypeError, ValueError):
+                pass
+        out.append(entry)
+    out.sort(key=lambda t: float(t.get("due_at", 0.0)))
+    return out
+
+
 def _load_runtime() -> Dict[str, Any]:
     rt = dict(_DEFAULT_RUNTIME)
+    rt["timers"] = []
     try:
         raw = database.get_metadata(_RUNTIME_META_KEY)
         if raw:
@@ -216,6 +248,7 @@ def _load_runtime() -> Dict[str, Any]:
                 rt.update(parsed)
     except Exception:
         pass
+    rt["timers"] = _normalize_fan_timers(rt.get("timers"))
     return rt
 
 
@@ -614,6 +647,97 @@ class FanController:
         self._last_error = last_err or "Không kết nối được tới quạt ESP-01S."
         return None
 
+    def get_timers_snapshot(self, now_ts: Optional[float] = None) -> List[Dict[str, Any]]:
+        now_v = float(now_ts if now_ts is not None else time.time())
+        timers = _normalize_fan_timers(self._runtime.get("timers"))
+        out: List[Dict[str, Any]] = []
+        for t in timers:
+            due_at = float(t["due_at"])
+            if due_at <= now_v:
+                continue
+            item: Dict[str, Any] = {
+                "action": t["action"],
+                "due_at": due_at,
+                "remaining_sec": max(0, int(due_at - now_v)),
+            }
+            if t.get("speed_pct") is not None:
+                item["speed_pct"] = int(t["speed_pct"])
+            out.append(item)
+        return out
+
+    def schedule_timer(
+        self,
+        action: str,
+        due_at: float,
+        *,
+        speed_pct: Optional[int] = None,
+        replace: bool = False,
+        now_ts: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        now_v = float(now_ts if now_ts is not None else time.time())
+        act = str(action or "").strip().lower()
+        if act in ("power_on",):
+            act = "on"
+        elif act in ("power_off",):
+            act = "off"
+        if act not in ("on", "off", "set_speed"):
+            raise ValueError(f"Invalid fan timer action: {action}")
+        entry: Dict[str, Any] = {
+            "action": act,
+            "due_at": float(due_at),
+            "created_at": now_v,
+        }
+        if speed_pct is not None:
+            entry["speed_pct"] = int(speed_pct)
+        timers = [] if replace else _normalize_fan_timers(self._runtime.get("timers"))
+        timers.append(entry)
+        self._runtime["timers"] = _normalize_fan_timers(timers)
+        self._save_rt()
+        self.publish_update()
+        return entry
+
+    def schedule_sequence(
+        self,
+        start_action: str,
+        due_at: float,
+        *,
+        speed_pct: Optional[int] = None,
+        duration_minutes: Optional[float] = None,
+        now_ts: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        now_v = float(now_ts if now_ts is not None else time.time())
+        act = str(start_action or "").strip().lower()
+        if act in ("power_on",):
+            act = "on"
+        elif act in ("power_off",):
+            act = "off"
+        steps: List[Dict[str, Any]] = []
+        start_entry: Dict[str, Any] = {
+            "action": act,
+            "due_at": float(due_at),
+            "created_at": now_v,
+        }
+        if speed_pct is not None:
+            start_entry["speed_pct"] = int(speed_pct)
+        steps.append(start_entry)
+        if duration_minutes is not None and float(duration_minutes) > 0 and act != "off":
+            steps.append({
+                "action": "off",
+                "due_at": float(due_at) + float(duration_minutes) * 60.0,
+                "created_at": now_v,
+            })
+        self._runtime["timers"] = _normalize_fan_timers(steps)
+        self._save_rt()
+        self.publish_update()
+        return list(self._runtime["timers"])
+
+    def cancel_timer(self) -> int:
+        prev = _normalize_fan_timers(self._runtime.get("timers"))
+        self._runtime["timers"] = []
+        self._save_rt()
+        self.publish_update()
+        return len(prev)
+
     def get_status_snapshot(self) -> Dict[str, Any]:
         settings = get_fan_settings()
         rt = self._runtime
@@ -624,6 +748,7 @@ class FanController:
         sleep_countdown = max(0, int((prompt_at + wait_secs) - now_ts)) if sleep_status == "waiting" and prompt_at > 0 else 0
         override_until = float(rt.get("manual_override_until") or 0.0)
         configured = bool(settings.get("fan_url") or settings.get("fan_mac") or self._resolved_url)
+        upcoming_timers = self.get_timers_snapshot(now_ts=now_ts)
 
         return {
             "configured": configured,
@@ -636,6 +761,7 @@ class FanController:
             "last_state_at": self._last_state_at,
             "ramping": bool(self._ramping_active),
             "ramp_target_pct": self._ramp_target_pct if self._ramping_active else None,
+            "timers": upcoming_timers,
             "automation": {
                 "phone_away_triggered": bool(rt.get("phone_away_triggered")),
                 "phone_away_since": float(rt.get("phone_away_since") or 0.0),
@@ -643,6 +769,7 @@ class FanController:
                 "sleep_prompt_status": sleep_status,
                 "sleep_countdown_sec": sleep_countdown,
                 "manual_override_sec": max(0, int(override_until - now_ts)),
+                "timer": upcoming_timers[0] if upcoming_timers else None,
             },
             "settings": settings,
         }
@@ -997,7 +1124,7 @@ class FanController:
         now_ts: float,
     ) -> bool:
         """
-        Theo dõi điện thoại Wi-Fi để tắt quạt khi ra ngoài (> away_grace_mins)
+        Theo dõi điện thoại Wi-Fi để tắt quạt/ổ cắm khi ra ngoài (>= away_grace_mins)
         và bật lại khi về phòng. Trả về True nếu điện thoại đang được xác nhận ở nhà.
         """
         phone_mac = str(pres.get("phone_mac") or "").strip()
@@ -1005,30 +1132,41 @@ class FanController:
             return True
 
         phone_online = bool(pres.get("phone_online"))
-        grace_mins = _clamp_int(pres.get("away_grace_mins"), 8, 2, 60)
+        pres_settings = pres.get("settings") if isinstance(pres.get("settings"), dict) else {}
+        raw_grace = pres.get("away_grace_mins")
+        if raw_grace is None:
+            raw_grace = pres_settings.get("away_grace_mins")
+        if raw_grace is None:
+            raw_grace = lan_presence.get_lan_settings().get("away_grace_mins", 8)
+        grace_mins = _clamp_int(raw_grace, 8, 2, 60)
         grace_secs = grace_mins * 60.0
+
         rt = self._runtime
         override_active = now_ts < float(rt.get("manual_override_until") or 0.0)
+        fan_auto = bool(settings.get("auto_enabled", True))
+        fan_configured = bool(settings.get("fan_url") or settings.get("fan_mac") or self._resolved_url)
 
         if phone_online:
-            was_away_triggered = bool(rt.get("phone_away_triggered"))
+            was_fan_away = bool(rt.get("phone_away_triggered"))
+            was_plugs_away = bool(rt.get("plugs_away_triggered"))
             rt["phone_away_since"] = 0.0
             rt["phone_away_triggered"] = False
+            rt["plugs_away_triggered"] = False
             rt["last_phone_online"] = True
             self._save_rt()
 
-            if was_away_triggered and not override_active:
-                if settings.get("auto_home", True):
-                    cur = await self.get_state(refresh=True)
-                    if cur is not None and not cur.get("is_on"):
-                        await self.set_power(True, reason="về phòng (phone Wi-Fi online)")
-                        lan_events.emit_notify(
-                            title="🏠 Chào mừng về phòng",
-                            body="Điện thoại vừa vào lại Wi-Fi nên quạt được tự động bật lại.",
-                            level="info",
-                            source="fan",
-                            speak_tts=False,
-                        )
+            if was_fan_away and not override_active and fan_auto and fan_configured and settings.get("auto_home", True):
+                cur = await self.get_state(refresh=True)
+                if cur is not None and not cur.get("is_on"):
+                    await self.set_power(True, reason="về phòng (phone Wi-Fi online)")
+                    lan_events.emit_notify(
+                        title="🏠 Chào mừng về phòng",
+                        body="Điện thoại vừa vào lại Wi-Fi nên quạt được tự động bật lại.",
+                        level="info",
+                        source="fan",
+                        speak_tts=False,
+                    )
+            if was_plugs_away or was_fan_away:
                 try:
                     import smart_plugs
                     await smart_plugs.get_controller().on_home_returned(now_ts=now_ts)
@@ -1046,11 +1184,21 @@ class FanController:
             self._save_rt()
 
         away_elapsed = now_ts - away_since
-        if away_elapsed >= grace_secs and not rt.get("phone_away_triggered"):
-            rt["phone_away_triggered"] = True
-            self._save_rt()
-            if not override_active:
-                if settings.get("auto_away", True):
+        if away_elapsed >= grace_secs:
+            # Ổ cắm BroadLink chạy độc lập với manual_override của riêng Quạt
+            if not rt.get("plugs_away_triggered"):
+                rt["plugs_away_triggered"] = True
+                self._save_rt()
+                try:
+                    import smart_plugs
+                    await smart_plugs.get_controller().on_away_triggered()
+                except Exception as plug_err:
+                    logger.debug(f"Lỗi auto_away BroadLink: {plug_err}")
+
+            if not rt.get("phone_away_triggered") and not override_active:
+                rt["phone_away_triggered"] = True
+                self._save_rt()
+                if fan_auto and fan_configured and settings.get("auto_away", True):
                     cur = await self.get_state(refresh=True)
                     if cur is not None and cur.get("is_on"):
                         await self.set_power(False, reason=f"ra ngoài >= {grace_mins}p")
@@ -1061,12 +1209,7 @@ class FanController:
                             source="fan",
                             speak_tts=False,
                         )
-                try:
-                    import smart_plugs
-                    await smart_plugs.get_controller().on_away_triggered()
-                except Exception as plug_err:
-                    logger.debug(f"Lỗi auto_away BroadLink: {plug_err}")
-        return not bool(rt.get("phone_away_triggered"))
+        return not bool(rt.get("phone_away_triggered") or rt.get("plugs_away_triggered"))
 
     async def _evaluate_sleep_checkin(
         self,
@@ -1158,6 +1301,40 @@ class FanController:
             self._save_rt()
             self.publish_update()
 
+    async def _tick_timers(self, now_ts: Optional[float] = None) -> List[Dict[str, Any]]:
+        now_v = float(now_ts if now_ts is not None else time.time())
+        timers = _normalize_fan_timers(self._runtime.get("timers"))
+        if not timers:
+            return []
+        due = [t for t in timers if float(t.get("due_at", 0.0)) <= now_v]
+        if not due:
+            return []
+        remaining = [t for t in timers if float(t.get("due_at", 0.0)) > now_v]
+        self._runtime["timers"] = remaining
+        self._save_rt()
+        executed: List[Dict[str, Any]] = []
+        for step in due:
+            act = str(step.get("action") or "").strip().lower()
+            res = None
+            if act == "on":
+                res = await self.set_power(True, manual=False, reason="Hẹn giờ bật quạt", event_source="fan_timer")
+            elif act == "off":
+                res = await self.set_power(False, manual=False, reason="Hẹn giờ tắt quạt", event_source="fan_timer")
+            elif act == "set_speed":
+                max_pct = int(get_fan_settings().get("max_speed_pct", 40))
+                pct = _clamp_int(step.get("speed_pct"), min(20, max_pct), 0, max_pct)
+                cur = await self.get_state(refresh=False)
+                if cur is None or not cur.get("is_on"):
+                    await self.set_power(True, manual=False, reason="Hẹn giờ bật quạt", event_source="fan_timer")
+                res = await self.set_speed(pct, manual=False, event_source="fan_timer")
+            if res is not None:
+                executed.append({"action": act, "due_at": float(step["due_at"]), "state": res})
+        self.publish_update()
+        return executed
+
+    def schedule_auto_off(self, off_due_at: float, *, now_ts: Optional[float] = None) -> Dict[str, Any]:
+        return self.schedule_timer("off", float(off_due_at), replace=True, now_ts=now_ts)
+
     async def tick(
         self,
         *,
@@ -1186,6 +1363,8 @@ class FanController:
             except Exception:
                 pass
 
+            await self._tick_timers(now_v)
+
             if not configured and not has_plugs:
                 return self.get_status_snapshot()
 
@@ -1193,12 +1372,9 @@ class FanController:
             if configured and (self._last_state is None or (now_v - self._last_state_at) >= 25.0):
                 await self.get_state(refresh=True, check_override=(not self._ramping_active))
 
-            if not settings.get("auto_enabled", True):
-                return self.get_status_snapshot()
-
             pres = presence_snapshot if presence_snapshot is not None else lan_presence.get_presence_snapshot()
             is_home = await self._evaluate_away_home(pres, settings, now_v)
-            if is_home:
+            if is_home and settings.get("auto_enabled", True):
                 await self._evaluate_sleep_checkin(bot, int(target_user_id or 0), settings, now_v)
 
             return self.get_status_snapshot()
@@ -1211,6 +1387,85 @@ class FanController:
         if not act or act == "null":
             return ""
 
+        now_ts = time.time()
+        dur_raw = ai_action.get("duration_minutes")
+        if dur_raw is None:
+            dur_raw = ai_action.get("duration_mins")
+        if dur_raw is None:
+            dur_raw = ai_action.get("for_minutes")
+        if dur_raw is None:
+            dur_raw = ai_action.get("minutes")
+        dur_mins: Optional[float] = None
+        if dur_raw is not None and str(dur_raw).strip() != "":
+            try:
+                dur_v = float(dur_raw)
+                if dur_v > 0:
+                    dur_mins = min(1440.0, dur_v)
+            except (TypeError, ValueError):
+                dur_mins = None
+
+        at_time_vn = (
+            ai_action.get("at_time_vn")
+            or ai_action.get("alarm_time_vn")
+            or ai_action.get("start_time_vn")
+            or ai_action.get("due_iso_vn")
+        )
+        delay_raw = (
+            ai_action.get("delay_minutes")
+            if ai_action.get("delay_minutes") is not None
+            else ai_action.get("after_minutes")
+        )
+        has_explicit_start = bool(str(at_time_vn or "").strip()) or (
+            delay_raw is not None and str(delay_raw).strip() != ""
+        )
+
+        if act in ("cancel_timer", "cancel_schedule"):
+            removed = self.cancel_timer()
+            if removed:
+                return f"[Hệ thống Quạt: Đã hủy {removed} lịch hẹn giờ quạt.]"
+            return "[Hệ thống Quạt: Quạt hiện chưa có lịch hẹn giờ nào đang chờ.]"
+
+        if act in ("schedule_on", "schedule_off") or (
+            act in ("power_on", "on", "power_off", "off", "set_speed", "speed") and has_explicit_start
+        ):
+            import diary_helper
+            due_at = diary_helper.resolve_device_schedule_ts(
+                at_time_vn=at_time_vn,
+                delay_minutes=delay_raw,
+                now_ts=now_ts,
+            )
+            if due_at is None and act == "schedule_off" and dur_mins is not None:
+                due_at = now_ts + dur_mins * 60.0
+                dur_mins = None
+            if due_at is None:
+                return "[Hệ thống Quạt: Chưa rõ mốc giờ hoặc số phút hẹn giờ quạt.]"
+
+            due_str = datetime.datetime.fromtimestamp(due_at, tz=VN_TZ).strftime("%H:%M")
+            max_pct = int(get_fan_settings().get("max_speed_pct", 40))
+            pct_raw = ai_action.get("speed_pct")
+            if pct_raw is None and ai_action.get("freq_hz") is not None:
+                pct_raw = freq_to_speed_pct(ai_action.get("freq_hz"))
+
+            if act in ("schedule_off", "power_off", "off"):
+                self.schedule_sequence("off", due_at, now_ts=now_ts)
+                return f"[Hệ thống Quạt: Đã hẹn {due_str} sẽ tắt quạt.]"
+
+            step_action = "set_speed" if pct_raw is not None else "on"
+            speed_pct = _clamp_int(pct_raw, min(20, max_pct), 0, max_pct) if pct_raw is not None else None
+            steps = self.schedule_sequence(
+                step_action,
+                due_at,
+                speed_pct=speed_pct,
+                duration_minutes=dur_mins,
+                now_ts=now_ts,
+            )
+            spd_note = f" ở mức {speed_pct}%" if speed_pct is not None else ""
+            if dur_mins is not None and len(steps) >= 2:
+                off_str = datetime.datetime.fromtimestamp(steps[-1]["due_at"], tz=VN_TZ).strftime("%H:%M")
+                dur_lbl = f"{int(dur_mins)}" if float(dur_mins).is_integer() else f"{dur_mins:g}"
+                return f"[Hệ thống Quạt: Đã hẹn {due_str} bật quạt{spd_note}, sau {dur_lbl} phút (lúc {off_str}) tự tắt.]"
+            return f"[Hệ thống Quạt: Đã hẹn {due_str} sẽ bật quạt{spd_note}.]"
+
         if act == "status":
             cur = await self.get_state(refresh=True)
             if cur is None:
@@ -1222,9 +1477,17 @@ class FanController:
             res = await self.set_power(True, manual=True, reason="AI/Chat", event_source=event_source)
             if res is None:
                 return "[Hệ thống Quạt: Không kết nối được quạt ESP-01S để bật.]"
+            if dur_mins is not None:
+                off_at = now_ts + dur_mins * 60.0
+                self.schedule_auto_off(off_at, now_ts=now_ts)
+                off_str = datetime.datetime.fromtimestamp(off_at, tz=VN_TZ).strftime("%H:%M")
+                dur_lbl = f"{int(dur_mins)}" if float(dur_mins).is_integer() else f"{dur_mins:g}"
+                return f"[Hệ thống Quạt: Đã bật quạt ({res['speed_pct']}% • {res['mode_label']}) và hẹn tự tắt sau {dur_lbl} phút (lúc {off_str}).]"
             return f"[Hệ thống Quạt: Đã bật quạt ({res['speed_pct']}% • {res['mode_label']}).]"
 
         if act in ("power_off", "off"):
+            self._runtime["sleep_prompt_status"] = "ramped" if self._runtime.get("sleep_prompt_status") == "waiting" else self._runtime.get("sleep_prompt_status", "none")
+            self._save_rt()
             res = await self.set_power(False, manual=True, reason="AI/Chat", event_source=event_source)
             if res is None:
                 return "[Hệ thống Quạt: Không kết nối được quạt ESP-01S để tắt.]"
@@ -1258,6 +1521,8 @@ class FanController:
 
         if act in ("set_speed", "speed"):
             pct_raw = ai_action.get("speed_pct")
+            if pct_raw is None and ai_action.get("freq_hz") is not None:
+                pct_raw = freq_to_speed_pct(ai_action.get("freq_hz"))
             if pct_raw is None:
                 return ""
             max_pct = int(get_fan_settings().get("max_speed_pct", 40))
@@ -1268,6 +1533,12 @@ class FanController:
             res = await self.set_speed(pct, manual=True, event_source=event_source)
             if res is None:
                 return "[Hệ thống Quạt: Không chỉnh được tốc độ quạt.]"
+            if dur_mins is not None:
+                off_at = now_ts + dur_mins * 60.0
+                self.schedule_auto_off(off_at, now_ts=now_ts)
+                off_str = datetime.datetime.fromtimestamp(off_at, tz=VN_TZ).strftime("%H:%M")
+                dur_lbl = f"{int(dur_mins)}" if float(dur_mins).is_integer() else f"{dur_mins:g}"
+                return f"[Hệ thống Quạt: Đã chỉnh tốc độ quạt về {res['speed_pct']}% ({res['output_freq']} Hz) và hẹn tự tắt sau {dur_lbl} phút (lúc {off_str}).]"
             return f"[Hệ thống Quạt: Đã chỉnh tốc độ quạt về {res['speed_pct']}% ({res['output_freq']} Hz).]"
 
         if act in ("speed_up", "speed_down"):
@@ -1285,6 +1556,55 @@ class FanController:
                 return "[Hệ thống Quạt: Không chỉnh được tốc độ quạt.]"
             return f"[Hệ thống Quạt: Đã {'tăng' if delta > 0 else 'giảm'} tốc độ quạt từ {cur['speed_pct']}% sang {res['speed_pct']}% ({res['output_freq']} Hz).]"
 
+        return ""
+
+    def build_sleep_prompt_context_note(self) -> str:
+        """Ghi chú ngữ cảnh read-only cho Pass 1 khi vừa hỏi thăm giờ ngủ (01:00) và đang chờ trả lời."""
+        if self._runtime.get("sleep_prompt_status") != "waiting":
+            return ""
+        return (
+            "[NGỮ CẢNH HỎI GIỜ NGỦ QUẠT]: Đan vừa nhắn hỏi xem anh ngủ chưa để tự hạ quạt về 0% & tắt ổ cắm đi ngủ (auto_sleep). "
+            "Nếu anh đồng ý đi ngủ/bảo hạ -> xuất `fan_action`: {\"action\": \"sleep_ramp\"}; "
+            "nếu anh bảo chưa ngủ/đừng hạ/giữ nguyên -> để `fan_action`: null (hệ thống sẽ tự hủy hẹn hạ quạt đêm nay)."
+        )
+
+    async def reconcile_sleep_prompt_after_ai(self, text: str, fan_action: Any = None) -> str:
+        """Đồng bộ trạng thái sleep_prompt sau khi Pass 1 đã đọc ngữ cảnh và quyết định `fan_action`."""
+        rt = self._runtime
+        if rt.get("sleep_prompt_status") != "waiting":
+            return ""
+        act = str((fan_action or {}).get("action") or "").strip().lower() if isinstance(fan_action, dict) else ""
+        if act in ("sleep_ramp", "power_off", "off"):
+            rt["sleep_prompt_status"] = "ramped"
+            self._save_rt()
+            self.publish_update()
+            plugs_off: List[str] = []
+            try:
+                import smart_plugs
+                plugs_off = await smart_plugs.get_controller().on_sleep_triggered()
+            except Exception:
+                pass
+            if plugs_off:
+                return f"[Hệ thống Ổ cắm giờ ngủ: Đã tự động tắt {', '.join(plugs_off)} cùng lúc đi ngủ.]"
+            return ""
+
+        reply_kind = classify_sleep_reply(text)
+        if reply_kind == "awake" or act in ("power_on", "on", "set_speed", "speed", "speed_up"):
+            rt["sleep_prompt_status"] = "cancelled"
+            rt["manual_override_until"] = time.time() + MANUAL_OVERRIDE_COOLDOWN_SEC
+            self._save_rt()
+            self.publish_update()
+            return "[Hệ thống Quạt: Anh xác nhận chưa ngủ / giữ nguyên -> đã hủy tự hạ quạt đêm nay.]"
+
+        today_vn = datetime.datetime.now(VN_TZ).strftime("%Y-%m-%d")
+        if rt.get("sleep_reask_date") != today_vn:
+            rt["sleep_prompted_date"] = ""
+            rt["sleep_prompt_status"] = "none"
+            rt["sleep_reask_date"] = today_vn
+        else:
+            rt["sleep_prompt_status"] = "cancelled"
+        self._save_rt()
+        self.publish_update()
         return ""
 
     async def handle_natural_fan_intent(self, text: str) -> str:
@@ -1373,14 +1693,14 @@ async def fan_monitor_loop(bot: Any = None, target_user_id: int = 0) -> None:
             latest_pres: Optional[Dict[str, Any]] = None
             try:
                 ev = await asyncio.wait_for(q.get(), timeout=MONITOR_POLL_INTERVAL_SEC)
-                if isinstance(ev, dict) and ev.get("event") == "presence_update":
+                if isinstance(ev, dict) and (ev.get("type") or ev.get("event")) == "presence_update":
                     data = ev.get("data")
                     if isinstance(data, dict):
                         latest_pres = data
                 # Rút bớt event dồn nếu có nhiều cái liên tiếp
                 while not q.empty():
                     extra = q.get_nowait()
-                    if isinstance(extra, dict) and extra.get("event") == "presence_update" and isinstance(extra.get("data"), dict):
+                    if isinstance(extra, dict) and (extra.get("type") or extra.get("event")) == "presence_update" and isinstance(extra.get("data"), dict):
                         latest_pres = extra["data"]
             except asyncio.TimeoutError:
                 pass

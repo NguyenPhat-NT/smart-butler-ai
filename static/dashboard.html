@@ -17,6 +17,9 @@
       --ok: #34d399;
       --warn: #fbbf24;
       --err: #fb7185;
+      --danger: var(--err);
+      --pink: var(--accent);
+      --info: var(--accent2);
       --radius: 14px;
     }
     * { box-sizing: border-box; }
@@ -142,6 +145,63 @@
     }
     .switch-row:last-child { border-bottom: none; }
     input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+
+    /* Quick Control UX enhancements */
+    html { scroll-behavior: smooth; }
+    .quick-hub {
+      background: linear-gradient(135deg, rgba(30, 41, 75, 0.94), rgba(19, 28, 52, 0.92));
+      border-color: rgba(96, 165, 250, 0.28);
+      margin-bottom: 12px;
+    }
+    .jump-pills {
+      display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding-bottom: 2px;
+      scrollbar-width: none;
+    }
+    .jump-pills::-webkit-scrollbar { display: none; }
+    .btn-pill {
+      white-space: nowrap; border-radius: 999px; padding: 5px 11px; font-size: 0.78rem;
+      background: rgba(15, 23, 42, 0.72); border: 1px solid var(--border); color: var(--text);
+      text-decoration: none; display: inline-flex; align-items: center; gap: 4px;
+    }
+    .btn-pill:hover { background: rgba(51, 65, 85, 0.85); border-color: rgba(96, 165, 250, 0.4); }
+    .device-card {
+      background: rgba(15, 23, 42, 0.72); border: 1px solid var(--border);
+      border-radius: 13px; padding: 12px 14px; transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .device-card.is-on {
+      border-color: rgba(52, 211, 153, 0.45);
+      background: rgba(16, 185, 129, 0.08);
+    }
+    .btn-power-lg {
+      min-height: 44px; padding: 9px 16px; font-size: 0.94rem; font-weight: 700;
+      border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-power-is-on {
+      background: rgba(16, 185, 129, 0.2); border-color: rgba(52, 211, 153, 0.65); color: #6ee7b7;
+    }
+    .btn-power-is-on:hover { background: rgba(244, 63, 94, 0.22); border-color: rgba(244, 63, 94, 0.55); color: #fda4af; }
+    .btn-power-is-off {
+      background: linear-gradient(135deg, #2563eb, #3b82f6); border-color: transparent; color: #fff;
+    }
+    .btn-power-is-off:hover { filter: brightness(1.08); }
+    details.cfg-drawer {
+      margin-top: 8px; border: 1px dashed var(--border); border-radius: 10px;
+      padding: 7px 10px; background: rgba(15, 23, 42, 0.44);
+    }
+    details.cfg-drawer > summary {
+      cursor: pointer; font-size: 0.82rem; font-weight: 600; color: var(--muted);
+      list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      user-select: none;
+    }
+    details.cfg-drawer > summary::-webkit-details-marker { display: none; }
+    details.cfg-drawer[open] > summary { color: var(--text); margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .drawer-body { padding-top: 2px; }
+    .section-anchor { scroll-margin-top: 105px; }
+    @media (max-width: 640px) {
+      .container { padding: 10px 10px 48px; }
+      .card { padding: 12px 13px; }
+      .btn-power-lg { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -182,7 +242,7 @@
           </div>
         </div>
         <nav class="tabs" id="tabNav">
-          <button class="tab-btn active" data-tab="overview">Tổng quan</button>
+          <button class="tab-btn active" data-tab="overview">⚡ Điều khiển &amp; Tổng quan</button>
           <button class="tab-btn" data-tab="memories">Ký ức</button>
           <button class="tab-btn" data-tab="journal">Nhật ký</button>
           <button class="tab-btn" data-tab="engine">Nhịp sống</button>
@@ -196,127 +256,177 @@
 
     <main class="container">
 
-      <!-- TAB 1: OVERVIEW -->
+      <!-- TAB 1: OVERVIEW & QUICK ROOM CONTROL -->
       <section id="tab-overview" class="tab-panel">
-        <div class="grid grid-3">
-          <div class="card">
-            <h3>🏠 LAN Presence (Ẩn)</h3>
-            <div id="ovPresenceMain" class="stat-num">...</div>
-            <div id="ovPresenceDetail" class="muted" style="margin-top:6px;"></div>
+
+        <!-- 1. QUICK ROOM HUB (ALWAYS FIRST & 1-TAP) -->
+        <div id="quickRoomHub" class="card quick-hub">
+          <div class="row between" style="margin-bottom:8px;">
+            <div class="row" style="gap:6px;">
+              <h2 style="margin:0;">⚡ Điều Khiển Phòng Nhanh</h2>
+              <span id="quickDhtBadge" class="badge b-info">🌡️ —°C • 💧 —%</span>
+              <span id="quickPresenceBadge" class="badge b-info">🏠 —</span>
+              <span id="quickAudioBadge" class="badge b-info">🔊 Loa —</span>
+            </div>
+            <div class="jump-pills">
+              <a href="#secPlugs" class="btn-pill">🔌 Ổ cắm</a>
+              <a href="#secFan" class="btn-pill">🌬️ Quạt BLDC</a>
+              <a href="#secJukebox" class="btn-pill">🔊 Loa &amp; Nhạc</a>
+              <a href="#secSystem" class="btn-pill">📊 Hệ thống</a>
+            </div>
           </div>
-          <div class="card">
-            <h3>🎙️ PC Bridge (TTS &amp; Tải Nhạc)</h3>
-            <div id="ovTtsMain" class="stat-num">...</div>
-            <div id="ovTtsDetail" class="muted" style="margin-top:6px;"></div>
-            <div id="ovMusicDlLine" class="muted" style="margin-top:4px;"></div>
-          </div>
-          <div class="card">
-            <h3>🛡️ Watchdog Mạng</h3>
-            <div id="ovWdMain" class="stat-num">...</div>
-            <div id="ovWdDetail" class="muted" style="margin-top:6px;"></div>
+          <div class="row" style="gap:8px;">
+            <button id="btnQuickWakePc" type="button" class="btn-blue" onclick="routerAction('wake_pc')">🖥️ Bật PC (WoL)</button>
+            <button id="btnQuickPcLive" type="button" class="btn-blue" onclick="togglePcBridgeLive()">💻 Tiếng PC → Loa</button>
+            <button id="btnQuickWebCast" type="button" class="btn-pink" onclick="toggleWebAudioCast()">📡 Cast Tab → Loa</button>
+            <button id="btnQuickSleepScene" type="button" class="btn-primary" onclick="runQuickSleepScene()">🌙 Chế độ Đi ngủ</button>
+            <button id="btnQuickAllOff" type="button" class="btn-danger" onclick="runQuickAllOff()">⏻ Tắt hết thiết bị</button>
           </div>
         </div>
 
-        <div class="grid grid-2" style="margin-top:12px;">
-          <div class="card">
-            <h2>📊 Chỉ số & Gemini API Pool</h2>
-            <div id="ovStatsBlock" class="muted">Đang tải...</div>
+        <!-- 2. SMART PLUGS (BROADLINK SPMINI) -->
+        <div id="secPlugs" class="card section-anchor" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🔌 Ổ Cắm Thông Minh BroadLink SPmini</h2>
+            <div class="row">
+              <span id="plugsCountBadge" class="badge b-info">0 ổ</span>
+              <button id="btnPlugsRefresh" type="button" class="btn-sm">🔄 Làm mới</button>
+              <button id="btnPlugsScan" type="button" class="btn-sm btn-blue">🔍 Quét ổ cắm</button>
+            </div>
           </div>
-          <div class="card">
-            <div class="row between">
-              <h2>🔔 Thông báo tại chỗ</h2>
-              <div class="row">
-                <label class="row muted" style="font-size:0.78rem; gap:4px;">
-                  <input type="checkbox" id="chkTestSpeak" /> Đọc TTS
-                </label>
-                <button id="btnTestNotify" class="btn-sm btn-blue">Test Chuông</button>
+          <div id="plugsGrid" class="grid grid-2">
+            <div class="muted">Đang tải danh sách ổ cắm BroadLink...</div>
+          </div>
+        </div>
+
+        <!-- 3. SMART BLDC FAN (ESP-01S) -->
+        <div id="secFan" class="card section-anchor" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🌬️ Quạt Thông Minh BLDC (ESP-01S)</h2>
+            <div class="row">
+              <span id="fanOnlineBadge" class="badge b-warn">Quạt: Chưa cấu hình</span>
+              <span id="fanFreqBadge" class="badge b-info">— Hz • —%</span>
+              <span id="fanAutoBadge" class="badge b-pink hidden">Tự động</span>
+            </div>
+          </div>
+
+          <div class="device-card" id="fanPrimaryCard">
+            <div class="row between" style="gap:10px; margin-bottom:10px;">
+              <button id="btnFanPower" type="button" class="btn-power-lg btn-power-is-off">⏻ Bật / Tắt Quạt</button>
+              <div class="row" style="gap:6px;">
+                <button id="btnFanModeFixed" type="button" class="btn-sm">💨 Cố định</button>
+                <button id="btnFanModeNatural" type="button" class="btn-sm btn-blue">🍃 Gió tự nhiên</button>
+                <button id="btnFanSleepRamp" type="button" class="btn-sm">🌙 Hạ dần 1005 Hz</button>
+                <button id="btnFanRefresh" type="button" class="btn-sm" title="Đọc lại trạng thái">🔄</button>
               </div>
             </div>
-            <div id="ovNotifyList" class="item-list"></div>
-          </div>
-        </div>
 
-        <div class="card" style="margin-top:12px;">
-          <div class="row between" style="margin-bottom:8px;">
-            <h2>🎙️ Nghe thử Nhấn nhá &amp; Giọng Trợ Lý TTS</h2>
-            <span id="ttsAuditionStatus" class="muted" style="font-size:0.8rem;">Sẵn sàng</span>
-          </div>
-          <div class="row" style="margin-bottom:8px; gap:8px; flex-wrap:wrap;">
-            <select id="ttsAuditionMood" style="min-width:190px;">
-              <option value="">Tâm trạng: Tự động theo câu</option>
-              <optgroup label="Vui &amp; Tích cực">
-                <option value="vui vẻ">😄 Vui vẻ</option>
-                <option value="hào hứng">✨ Hào hứng</option>
-                <option value="bất ngờ">😲 Bất ngờ / Ngạc nhiên</option>
-              </optgroup>
-              <optgroup label="Dịu dàng &amp; Yêu thương">
-                <option value="ngọt ngào" selected>💗 Ngọt ngào / Dịu dàng</option>
-                <option value="nũng nịu">🥹 Nũng nịu / Làm nũng</option>
-                <option value="ngại ngùng">😳 Ngại ngùng / E thẹn</option>
-                <option value="lo lắng">🫧 Lo lắng / Quan tâm</option>
-              </optgroup>
-              <optgroup label="Trêu &amp; Cảm xúc mạnh">
-                <option value="cà khịa">😏 Cà khịa / Trêu</option>
-                <option value="dỗi nhẹ">🥺 Dỗi nhẹ / Hờn</option>
-                <option value="cộc nhẹ">😤 Cộc nhẹ</option>
-                <option value="tủi thân">💧 Tủi thân / Buồn</option>
-              </optgroup>
-              <optgroup label="Đêm &amp; Lắng đọng">
-                <option value="thì thầm khuya">🕯️ Thì thầm khuya</option>
-                <option value="lười biếng">🌙 Lười biếng / Buồn ngủ</option>
-                <option value="bình yên">🌿 Bình yên / Tự nhiên</option>
-              </optgroup>
-            </select>
-            <select id="ttsAuditionTod" style="min-width:130px;">
-              <option value="">Khung giờ: Tự động</option>
-              <option value="morning">🌅 Sáng tươi</option>
-              <option value="evening">🌆 Tối ấm</option>
-              <option value="late_night">🌙 Khuya êm dịu</option>
-            </select>
-            <label class="row muted" style="font-size:0.82rem; gap:6px;" title="Cường độ diễn cảm (0.60x nhẹ nhàng – 1.35x giàu cảm xúc)">
-              Cường độ: <input type="range" id="ttsAuditionIntensity" min="0.60" max="1.35" step="0.05" value="1.00" style="width:92px;" />
-              <span id="ttsAuditionIntensityVal">1.00x</span>
-            </label>
-            <label class="row muted" style="font-size:0.82rem; gap:4px;">
-              <input type="checkbox" id="chkTtsProsody" checked /> Bật Prosody DSP
-            </label>
-          </div>
-          <div class="row" style="margin-bottom:8px; gap:4px; flex-wrap:wrap;">
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [cười]">+ [cười]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [cười khúc khích]">+ [cười khúc khích]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [thở dài]">+ [thở dài]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [hắng giọng]">+ [hắng giọng]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [hứ]">+ [hứ]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [ngập ngừng]">+ [ngập ngừng]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [ngạc nhiên]">+ [ngạc nhiên]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" [thì thầm]">+ [thì thầm]</button>
-            <button type="button" class="btn-sm tts-cue-btn" data-cue=" *nhấn*">+ *nhấn*</button>
-          </div>
-          <div class="row" style="gap:8px; flex-wrap:wrap;">
-            <input id="ttsAuditionText" value="Anh ơi... hôm nay làm việc có mệt lắm không [thở dài]? Tối nay em *thương* anh nhiều xíu nè [cười]." style="flex:1; min-width:240px;" />
-            <button type="button" id="btnTtsAuditionBrowser" class="btn-sm btn-pink">▶ Nghe trình duyệt</button>
-            <button type="button" id="btnTtsAuditionEsp32" class="btn-sm btn-blue">🔊 Đọc loa ESP32</button>
-          </div>
-        </div>
+            <div class="row" style="margin-bottom:8px;">
+              <span class="muted" style="min-width:60px;">Tốc độ:</span>
+              <input id="fanSpeedSlider" type="range" min="0" max="40" value="0" style="flex:1; min-width:130px;" />
+              <span id="fanSpeedVal" class="mono" style="min-width:112px; text-align:right;">0% • 1005 Hz</span>
+            </div>
 
-        <div class="card" style="margin-top:12px;">
-          <div class="row between" style="margin-bottom:8px;">
-            <h2>🖥️ Sức khỏe Hệ thống OpenStick</h2>
-            <div class="row">
-              <span id="sysTempBadge" class="badge b-info">🌡️ —°C</span>
-              <span id="sysDspBadge" class="badge b-info">DSP: —</span>
-              <span id="sysAuditBadge" class="badge b-ok">Logic Audit: —</span>
-              <span id="sysUptimeBadge" class="badge b-info">⏱️ —</span>
+            <div class="row" style="margin-bottom:8px;">
+              <button type="button" class="btn-sm" onclick="fanCtrl('speed', 0)">Ngủ (1005Hz)</button>
+              <button id="btnFanPreset1" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 10))" data-pct="10">Mức 1 (10%)</button>
+              <button id="btnFanPreset2" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 20))" data-pct="20">Mức 2 (20%)</button>
+              <button id="btnFanPreset3" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 30))" data-pct="30">Mức 3 (30%)</button>
+              <button id="btnFanPresetMax" type="button" class="btn-sm btn-blue" onclick="fanCtrl('speed', window._fanMaxPct || 40)">Tối đa (1800Hz)</button>
+            </div>
+
+            <div id="fanTimerRow" class="row" style="padding-top:8px; border-top:1px dashed var(--border);">
+              <span class="muted" style="font-size:0.8rem;">⏱️ Hẹn nhanh:</span>
+              <button type="button" class="btn-pill" onclick="fanCtrl('power', true, {duration_minutes: 30})">⚡ Bật 30p</button>
+              <button type="button" class="btn-pill" onclick="fanCtrl('timer', false, {delay_minutes: 15})">🌙 Tắt 15p</button>
+              <button type="button" class="btn-pill" onclick="fanCtrl('timer', false, {delay_minutes: 30})">🌙 Tắt 30p</button>
+              <button type="button" class="btn-pill" onclick="fanCtrl('timer', false, {delay_minutes: 60})">🌙 Tắt 60p</button>
+              <span id="fanTimerBadge" class="hidden"></span>
+            </div>
+
+            <div id="fanStateSummary" class="muted" style="font-size:0.8rem; margin-top:8px;">
+              Chưa kết nối quạt ESP-01S. Mở "Cấu hình &amp; Hẹn giờ Quạt" để quét tìm quạt.
             </div>
           </div>
-          <div id="ovSystemGrid" class="grid grid-3">
-            <div class="muted">Đang đọc thông số phần cứng...</div>
-          </div>
+
+          <details class="cfg-drawer" id="fanConfigDrawer">
+            <summary>
+              <span>⚙️ Hẹn giờ HH:MM &amp; Cấu hình Tự động Quạt BLDC</span>
+              <span class="muted" style="font-size:0.76rem;">IP / MAC / Tự tắt</span>
+            </summary>
+            <div class="drawer-body">
+              <div class="item-card" style="margin-bottom:10px;">
+                <div class="muted" style="font-size:0.8rem; margin-bottom:6px;">⏰ Hẹn giờ quạt theo mốc giờ VN (vd: bật 22:00 trong 30 phút)</div>
+                <div class="row">
+                  <input id="fanTimerTime" type="time" value="22:00" style="width:105px;" />
+                  <select id="fanTimerAction">
+                    <option value="on">Bật quạt</option>
+                    <option value="off">Tắt quạt</option>
+                  </select>
+                  <input id="fanTimerDur" type="number" min="0" max="720" value="30" style="width:74px;" title="Thời lượng bật (phút, 0 = không tự tắt)" />
+                  <span class="muted" style="font-size:0.8rem;">phút</span>
+                  <button type="button" id="btnFanCustomTimer" class="btn-sm btn-blue" onclick="submitFanCustomTimer()">Đặt lịch quạt</button>
+                </div>
+              </div>
+
+              <form id="fanConfigForm">
+                <div class="row" style="margin-bottom:6px;">
+                  <div class="field" style="flex:1; margin-bottom:0;">
+                    <label for="fanUrlInput">URL ESP-01S (hoặc tự dò)</label>
+                    <input id="fanUrlInput" class="mono" placeholder="http://192.168.1.50" />
+                  </div>
+                  <div class="field" style="flex:1; margin-bottom:0;">
+                    <label for="fanMacInput">MAC Quạt ESP-01S</label>
+                    <input id="fanMacInput" class="mono" placeholder="aa:bb:cc:dd:ee:ff" />
+                  </div>
+                  <button id="btnFanScan" type="button" class="btn-blue" style="align-self:flex-end;">🔍 Quét tìm quạt</button>
+                </div>
+
+                <div class="row" style="margin-bottom:6px;">
+                  <div class="field" style="flex:1; margin-bottom:0;">
+                    <label for="fanSleepAskTime">Giờ hỏi đi ngủ (VN)</label>
+                    <input id="fanSleepAskTime" type="time" value="01:00" />
+                  </div>
+                  <div class="field" style="flex:1; margin-bottom:0;">
+                    <label for="fanSleepWaitMins">Chờ trả lời (phút)</label>
+                    <input id="fanSleepWaitMins" type="number" min="5" max="180" value="30" />
+                  </div>
+                  <div class="field" style="flex:1; margin-bottom:0;">
+                    <label for="fanMaxFreqHz">Tối đa (Hz)</label>
+                    <input id="fanMaxFreqHz" type="number" min="1200" max="3000" step="25" value="1800" />
+                  </div>
+                </div>
+
+                <div class="switch-row">
+                  <span>Bật tự động hóa Quạt</span>
+                  <input type="checkbox" id="chkFanAutoEnabled" checked />
+                </div>
+                <div class="switch-row">
+                  <span>Tự tắt khi điện thoại rời Wi-Fi (&gt; grace)</span>
+                  <input type="checkbox" id="chkFanAutoAway" checked />
+                </div>
+                <div class="switch-row">
+                  <span>Tự bật lại khi điện thoại về Wi-Fi</span>
+                  <input type="checkbox" id="chkFanAutoHome" checked />
+                </div>
+                <div class="switch-row">
+                  <span>Khuya hỏi ngủ -&gt; giảm dần 1%/1.2s về 0% (1005 Hz)</span>
+                  <input type="checkbox" id="chkFanAutoSleep" checked />
+                </div>
+                <div class="switch-row">
+                  <span>Gửi kèm giọng nói TTS (Voice) lúc hỏi đi ngủ</span>
+                  <input type="checkbox" id="chkFanSleepVoice" />
+                </div>
+                <button type="submit" class="btn-primary btn-sm" style="width:100%; margin-top:8px;">Lưu cấu hình Quạt</button>
+              </form>
+            </div>
+          </details>
         </div>
 
-        <div class="card" style="margin-top:12px;">
+        <!-- 4. ESP32-C3 SPEAKER & JUKEBOX -->
+        <div id="secJukebox" class="card section-anchor" style="margin-top:12px;">
           <div class="row between" style="margin-bottom:8px;">
-            <h2>🔊 Loa Thông Minh ESP32-C3 &amp; Jukebox (Độc lập trên USB)</h2>
+            <h2>🔊 Loa Thông Minh ESP32-C3 &amp; Jukebox (USB)</h2>
             <div class="row">
               <span id="jbEspBadge" class="badge b-warn">ESP32: đang chờ</span>
               <span id="jbDhtBadge" class="badge b-info">🌡️ —°C • 💧 —%</span>
@@ -346,6 +456,16 @@
                 </div>
               </div>
 
+              <div id="jbLiveBanner" class="item-card hidden" style="margin-bottom:8px; border-color:rgba(96,165,250,0.55); background:rgba(37,99,235,0.12);">
+                <div class="row between">
+                  <div>
+                    <strong id="jbLiveTitle">📡 Loa Không Dây đang bật</strong>
+                    <div id="jbLiveMeta" class="muted" style="font-size:0.78rem;">WebSocket Live Audio</div>
+                  </div>
+                  <button type="button" class="btn-sm btn-danger" onclick="stopAnyLiveSpeaker()">⏹️ Ngắt Loa Live</button>
+                </div>
+              </div>
+
               <div id="jbNowPlayingBox" class="item-card" style="margin-bottom:8px;">
                 <div class="muted">Chưa phát bài nào.</div>
               </div>
@@ -372,67 +492,83 @@
                 <button type="button" class="btn-sm" onclick="jukeboxCtrl('sleep_timer', 0)">Hủy hẹn</button>
               </div>
 
-              <form id="jukeboxPlayForm" class="row" style="margin-bottom:10px;">
+              <form id="jukeboxPlayForm" class="row" style="margin-bottom:8px;">
                 <input id="jukeboxQueryInput" placeholder="Tên bài hát, link YouTube hoặc SoundCloud..." style="flex:1; min-width:180px;" />
                 <button type="submit" class="btn-pink">Tải &amp; Phát</button>
               </form>
 
-              <div class="item-card" style="margin-bottom:8px;">
-                <div class="row" style="margin-bottom:6px;">
-                  <span class="muted" style="font-size:0.82rem;">⏱️ Chế độ:</span>
-                  <input id="jbSessionMins" type="number" min="1" max="360" value="15" style="width:68px;" title="Số phút" />
-                  <button type="button" id="btnJbFocus" class="btn-sm btn-pink">🎯 Focus</button>
-                  <button type="button" id="btnJbChill" class="btn-sm btn-blue">🌿 Chill</button>
-                  <button type="button" id="btnJbNap" class="btn-sm">😴 Chợp mắt</button>
-                </div>
-                <div class="row" style="margin-bottom:6px;">
-                  <input id="jbAlarmTime" type="time" value="06:30" style="width:105px;" />
-                  <input id="jbAlarmLabel" placeholder="Nhãn báo thức..." style="flex:1; min-width:110px;" />
-                  <button type="button" id="btnJbSetAlarm" class="btn-sm btn-blue">⏰ Đặt báo thức</button>
-                </div>
-                <div class="row">
-                  <input id="jbScheduleQuery" placeholder="Bài hát/chủ đề hẹn phát (vd Thanh Xuân)..." style="flex:1; min-width:140px;" />
-                  <input id="jbScheduleDur" type="number" min="0" max="360" value="0" style="width:66px;" title="Thời lượng phát (phút, 0 = phát bình thường)" />
-                  <button type="button" id="btnJbScheduleMusic" class="btn-sm btn-pink">🎵 Hẹn phát nhạc</button>
-                </div>
-                <div id="jbAlarmList" style="margin-top:6px;"></div>
+              <div class="row" style="margin-bottom:8px; gap:6px;">
+                <button id="btnJbWebCast" type="button" class="btn-sm btn-pink" onclick="toggleWebAudioCast()">📡 Cast Trình duyệt / Hệ thống</button>
+                <button id="btnJbPcLive" type="button" class="btn-sm btn-blue" onclick="togglePcBridgeLive()">💻 Tiếng PC Bridge (8091)</button>
+                <button id="btnJbCastFile" type="button" class="btn-sm" onclick="$('jbCastFileInput').click()">📁 Cast File nhạc từ máy</button>
+                <input id="jbCastFileInput" type="file" accept="audio/*,video/*" class="hidden" />
               </div>
 
-              <div class="item-card">
-                <div class="row between" style="margin-bottom:6px;">
-                  <strong style="font-size:0.86rem;">🎚️ EQ Loa 4cm Thông Hơi (Cắt dưới 60Hz)</strong>
-                  <span id="jbEqActiveTag" class="badge b-ok">Loudness</span>
-                </div>
-                <div class="row" id="jbEqPresetRow" style="margin-bottom:8px;">
-                  <button type="button" class="btn-sm jb-eq-preset" data-preset="loudness">Loudness 4cm</button>
-                  <button type="button" class="btn-sm jb-eq-preset" data-preset="warm">Bass ấm</button>
-                  <button type="button" class="btn-sm jb-eq-preset" data-preset="clear">Focus rõ</button>
-                  <button type="button" class="btn-sm jb-eq-preset" data-preset="flat">Phẳng</button>
-                  <button type="button" class="btn-sm jb-eq-preset" data-preset="off">Tắt EQ</button>
-                </div>
-                <div class="row" style="margin-bottom:4px;">
-                  <span class="muted" style="min-width:74px; font-size:0.8rem;">Bass 135Hz:</span>
-                  <input id="jbEqBass" type="range" min="-6" max="9" step="0.5" value="4" style="flex:1;" />
-                  <span id="jbEqBassVal" class="mono" style="min-width:58px; font-size:0.8rem;">+4.0 dB</span>
-                </div>
-                <div class="row" style="margin-bottom:4px;">
-                  <span class="muted" style="min-width:74px; font-size:0.8rem;">Treble 5.2k:</span>
-                  <input id="jbEqTreble" type="range" min="-6" max="9" step="0.5" value="3.5" style="flex:1;" />
-                  <span id="jbEqTrebleVal" class="mono" style="min-width:58px; font-size:0.8rem;">+3.5 dB</span>
-                </div>
-                <div class="row">
-                  <span class="muted" style="min-width:74px; font-size:0.8rem;">High-pass:</span>
-                  <input id="jbEqHp" type="range" min="40" max="150" step="5" value="60" style="flex:1;" />
-                  <span id="jbEqHpVal" class="mono" style="min-width:58px; font-size:0.8rem;">60 Hz</span>
-                </div>
-                <div class="row between" style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border);">
-                  <label style="font-size:0.82rem; display:flex; align-items:center; gap:6px; cursor:pointer;">
-                    <input type="checkbox" id="chkJbNorm" checked />
-                    <span>Cân bằng âm lượng theo trung bình bài</span>
-                  </label>
-                  <span id="jbNormBadge" class="badge b-ok">Auto</span>
-                </div>
+              <div class="row" style="margin-bottom:6px;">
+                <span class="muted" style="font-size:0.82rem;">⏱️ Chế độ:</span>
+                <input id="jbSessionMins" type="number" min="1" max="360" value="15" style="width:68px;" title="Số phút" />
+                <button type="button" id="btnJbFocus" class="btn-sm btn-pink">🎯 Focus</button>
+                <button type="button" id="btnJbChill" class="btn-sm btn-blue">🌿 Chill</button>
+                <button type="button" id="btnJbNap" class="btn-sm">😴 Chợp mắt</button>
               </div>
+
+              <details class="cfg-drawer">
+                <summary>
+                  <span>⏰ Báo thức &amp; Hẹn phát nhạc</span>
+                  <span id="jbAlarmCountBadge" class="badge b-info">0 hẹn</span>
+                </summary>
+                <div class="drawer-body">
+                  <div class="row" style="margin-bottom:6px;">
+                    <input id="jbAlarmTime" type="time" value="06:30" style="width:105px;" />
+                    <input id="jbAlarmLabel" placeholder="Nhãn báo thức..." style="flex:1; min-width:110px;" />
+                    <button type="button" id="btnJbSetAlarm" class="btn-sm btn-blue">⏰ Đặt báo thức</button>
+                  </div>
+                  <div class="row">
+                    <input id="jbScheduleQuery" placeholder="Bài hát/chủ đề hẹn phát (vd Thanh Xuân)..." style="flex:1; min-width:140px;" />
+                    <input id="jbScheduleDur" type="number" min="0" max="360" value="0" style="width:66px;" title="Thời lượng phát (phút, 0 = phát bình thường)" />
+                    <button type="button" id="btnJbScheduleMusic" class="btn-sm btn-pink">🎵 Hẹn phát nhạc</button>
+                  </div>
+                  <div id="jbAlarmList" style="margin-top:6px;"></div>
+                </div>
+              </details>
+
+              <details class="cfg-drawer">
+                <summary>
+                  <span>🎚️ EQ Loa 4cm Thông Hơi &amp; Cân bằng âm lượng</span>
+                  <span id="jbEqActiveTag" class="badge b-ok">Loudness</span>
+                </summary>
+                <div class="drawer-body">
+                  <div class="row" id="jbEqPresetRow" style="margin-bottom:8px;">
+                    <button type="button" class="btn-sm jb-eq-preset" data-preset="loudness">Loudness 4cm</button>
+                    <button type="button" class="btn-sm jb-eq-preset" data-preset="warm">Bass ấm</button>
+                    <button type="button" class="btn-sm jb-eq-preset" data-preset="clear">Focus rõ</button>
+                    <button type="button" class="btn-sm jb-eq-preset" data-preset="flat">Phẳng</button>
+                    <button type="button" class="btn-sm jb-eq-preset" data-preset="off">Tắt EQ</button>
+                  </div>
+                  <div class="row" style="margin-bottom:4px;">
+                    <span class="muted" style="min-width:74px; font-size:0.8rem;">Bass 135Hz:</span>
+                    <input id="jbEqBass" type="range" min="-6" max="9" step="0.5" value="4" style="flex:1;" />
+                    <span id="jbEqBassVal" class="mono" style="min-width:58px; font-size:0.8rem;">+4.0 dB</span>
+                  </div>
+                  <div class="row" style="margin-bottom:4px;">
+                    <span class="muted" style="min-width:74px; font-size:0.8rem;">Treble 5.2k:</span>
+                    <input id="jbEqTreble" type="range" min="-6" max="9" step="0.5" value="3.5" style="flex:1;" />
+                    <span id="jbEqTrebleVal" class="mono" style="min-width:58px; font-size:0.8rem;">+3.5 dB</span>
+                  </div>
+                  <div class="row">
+                    <span class="muted" style="min-width:74px; font-size:0.8rem;">High-pass:</span>
+                    <input id="jbEqHp" type="range" min="40" max="150" step="5" value="60" style="flex:1;" />
+                    <span id="jbEqHpVal" class="mono" style="min-width:58px; font-size:0.8rem;">60 Hz</span>
+                  </div>
+                  <div class="row between" style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border);">
+                    <label style="font-size:0.82rem; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                      <input type="checkbox" id="chkJbNorm" checked />
+                      <span>Cân bằng âm lượng theo trung bình bài</span>
+                    </label>
+                    <span id="jbNormBadge" class="badge b-ok">Auto</span>
+                  </div>
+                </div>
+              </details>
             </div>
 
             <div>
@@ -440,13 +576,14 @@
                 <strong>💿 Kho nhạc USB Cache</strong>
                 <span id="jbCacheUsage" class="muted mono">0 bài • 0.0 / 150 MB</span>
               </div>
-              <div id="jukeboxCacheList" class="item-list" style="max-height:320px; overflow-y:auto; overflow-x:hidden; padding-right:4px;"></div>
+              <div id="jukeboxCacheList" class="item-list" style="max-height:300px; overflow-y:auto; overflow-x:hidden; padding-right:4px;"></div>
 
-              <details id="jbCookiesDetails" style="margin-top:10px;">
-                <summary class="muted" style="cursor:pointer; font-size:0.82rem;">
-                  🍪 YouTube Cookies (chống chặn bot) • <span id="jbCookiesBadge" class="badge b-warn">Chưa nạp</span>
+              <details id="jbCookiesDetails" class="cfg-drawer" style="margin-top:10px;">
+                <summary>
+                  <span>🍪 YouTube Cookies (chống chặn bot)</span>
+                  <span id="jbCookiesBadge" class="badge b-warn">Chưa nạp</span>
                 </summary>
-                <div class="item-card" style="margin-top:6px;">
+                <div class="drawer-body">
                   <div class="muted" style="font-size:0.78rem; margin-bottom:6px;">
                     Xuất file <code>cookies.txt</code> (định dạng Netscape) từ trình duyệt đang đăng nhập YouTube rồi chọn file hoặc dán vào đây.
                   </div>
@@ -462,112 +599,7 @@
           </div>
         </div>
 
-        <div class="card" style="margin-top:12px;">
-          <div class="row between" style="margin-bottom:8px;">
-            <h2>🌬️ Quạt Thông Minh BLDC (ESP-01S)</h2>
-            <div class="row">
-              <span id="fanOnlineBadge" class="badge b-warn">Quạt: Chưa cấu hình</span>
-              <span id="fanFreqBadge" class="badge b-info">— Hz • —%</span>
-              <span id="fanAutoBadge" class="badge b-pink hidden">Tự động</span>
-            </div>
-          </div>
-
-          <div class="grid grid-2">
-            <div>
-              <div id="fanStateSummary" class="item-card" style="margin-bottom:8px;">
-                <div class="muted">Chưa kết nối quạt ESP-01S. Bấm "Quét tìm quạt" hoặc nhập IP/MAC để đồng bộ.</div>
-              </div>
-
-              <div class="row" style="margin-bottom:8px;">
-                <button id="btnFanPower" type="button" class="btn-sm btn-pink">⏻ Bật / Tắt</button>
-                <button id="btnFanModeFixed" type="button" class="btn-sm">💨 Cố định</button>
-                <button id="btnFanModeNatural" type="button" class="btn-sm btn-blue">🍃 Gió tự nhiên</button>
-                <button id="btnFanSleepRamp" type="button" class="btn-sm">🌙 Hạ dần 1005 Hz</button>
-                <button id="btnFanRefresh" type="button" class="btn-sm">🔄</button>
-              </div>
-
-              <div class="row" style="margin-bottom:8px;">
-                <span class="muted" style="min-width:60px;">Tốc độ:</span>
-                <input id="fanSpeedSlider" type="range" min="0" max="40" value="0" style="flex:1; min-width:130px;" />
-                <span id="fanSpeedVal" class="mono" style="min-width:112px; text-align:right;">0% • 1005 Hz</span>
-              </div>
-
-              <div class="row" style="margin-bottom:6px;">
-                <button type="button" class="btn-sm" onclick="fanCtrl('speed', 0)">Ngủ (1005Hz)</button>
-                <button id="btnFanPreset1" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 10))" data-pct="10">Mức 1 (10%)</button>
-                <button id="btnFanPreset2" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 20))" data-pct="20">Mức 2 (20%)</button>
-                <button id="btnFanPreset3" type="button" class="btn-sm" onclick="fanCtrl('speed', Number(this.dataset.pct || 30))" data-pct="30">Mức 3 (30%)</button>
-                <button id="btnFanPresetMax" type="button" class="btn-sm btn-blue" onclick="fanCtrl('speed', window._fanMaxPct || 40)">Tối đa (1800Hz)</button>
-              </div>
-            </div>
-
-            <form id="fanConfigForm">
-              <div class="row" style="margin-bottom:6px;">
-                <div class="field" style="flex:1; margin-bottom:0;">
-                  <label for="fanUrlInput">URL ESP-01S (hoặc tự dò)</label>
-                  <input id="fanUrlInput" class="mono" placeholder="http://192.168.1.50" />
-                </div>
-                <div class="field" style="flex:1; margin-bottom:0;">
-                  <label for="fanMacInput">MAC Quạt ESP-01S</label>
-                  <input id="fanMacInput" class="mono" placeholder="aa:bb:cc:dd:ee:ff" />
-                </div>
-                <button id="btnFanScan" type="button" class="btn-blue" style="align-self:flex-end;">🔍 Quét tìm quạt</button>
-              </div>
-
-              <div class="row" style="margin-bottom:6px;">
-                <div class="field" style="flex:1; margin-bottom:0;">
-                  <label for="fanSleepAskTime">Giờ hỏi đi ngủ (VN)</label>
-                  <input id="fanSleepAskTime" type="time" value="01:00" />
-                </div>
-                <div class="field" style="flex:1; margin-bottom:0;">
-                  <label for="fanSleepWaitMins">Chờ trả lời (phút)</label>
-                  <input id="fanSleepWaitMins" type="number" min="5" max="180" value="30" />
-                </div>
-                <div class="field" style="flex:1; margin-bottom:0;">
-                  <label for="fanMaxFreqHz">Tối đa (Hz)</label>
-                  <input id="fanMaxFreqHz" type="number" min="1200" max="3000" step="25" value="1800" />
-                </div>
-              </div>
-
-              <div class="switch-row">
-                <span>Bật tự động hóa Quạt</span>
-                <input type="checkbox" id="chkFanAutoEnabled" checked />
-              </div>
-              <div class="switch-row">
-                <span>Tự tắt khi điện thoại rời Wi-Fi (&gt; grace)</span>
-                <input type="checkbox" id="chkFanAutoAway" checked />
-              </div>
-              <div class="switch-row">
-                <span>Tự bật lại khi điện thoại về Wi-Fi</span>
-                <input type="checkbox" id="chkFanAutoHome" checked />
-              </div>
-              <div class="switch-row">
-                <span>Khuya hỏi ngủ -&gt; giảm dần 1%/1.2s về 0% (1005 Hz)</span>
-                <input type="checkbox" id="chkFanAutoSleep" checked />
-              </div>
-              <div class="switch-row">
-                <span>Gửi kèm giọng nói TTS (Voice) lúc hỏi đi ngủ</span>
-                <input type="checkbox" id="chkFanSleepVoice" />
-              </div>
-              <button type="submit" class="btn-primary btn-sm" style="width:100%; margin-top:8px;">Lưu cấu hình Quạt</button>
-            </form>
-          </div>
-        </div>
-
-        <div class="card" style="margin-top:12px;">
-          <div class="row between" style="margin-bottom:8px;">
-            <h2>🔌 Ổ Cắm Thông Minh BroadLink SPmini</h2>
-            <div class="row">
-              <span id="plugsCountBadge" class="badge b-info">0 ổ</span>
-              <button id="btnPlugsRefresh" type="button" class="btn-sm">🔄 Làm mới</button>
-              <button id="btnPlugsScan" type="button" class="btn-sm btn-blue">🔍 Quét ổ cắm</button>
-            </div>
-          </div>
-          <div id="plugsGrid" class="grid grid-2">
-            <div class="muted">Đang tải danh sách ổ cắm BroadLink...</div>
-          </div>
-        </div>
-
+        <!-- 5. SMART HABITS -->
         <div class="card" style="margin-top:12px;">
           <div class="row between" style="margin-bottom:8px;">
             <h2>🧠 Thói Quen Tự Học (AI Ngầm)</h2>
@@ -584,6 +616,128 @@
           </div>
           <div id="habitsList">
             <div class="muted">Đang theo dõi thói quen sử dụng thiết bị...</div>
+          </div>
+        </div>
+
+        <!-- 6. SYSTEM & NETWORK OVERVIEW -->
+        <div id="secSystem" class="grid grid-3 section-anchor" style="margin-top:12px;">
+          <div class="card">
+            <h3>🏠 LAN Presence (Ẩn)</h3>
+            <div id="ovPresenceMain" class="stat-num">...</div>
+            <div id="ovPresenceDetail" class="muted" style="margin-top:6px;"></div>
+          </div>
+          <div class="card">
+            <h3>🎙️ PC Bridge (TTS &amp; Tải Nhạc)</h3>
+            <div id="ovTtsMain" class="stat-num">...</div>
+            <div id="ovTtsDetail" class="muted" style="margin-top:6px;"></div>
+            <div id="ovMusicDlLine" class="muted" style="margin-top:4px;"></div>
+          </div>
+          <div class="card">
+            <h3>🛡️ Watchdog &amp; Router</h3>
+            <div id="ovWdMain" class="stat-num">...</div>
+            <div id="ovWdDetail" class="muted" style="margin-top:6px;"></div>
+            <div id="ovRouterLine" class="muted" style="margin-top:4px;"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-2" style="margin-top:12px;">
+          <div class="card">
+            <h2>📊 Chỉ số &amp; Gemini API Pool</h2>
+            <div id="ovStatsBlock" class="muted">Đang tải...</div>
+          </div>
+          <div class="card">
+            <div class="row between">
+              <h2>🔔 Thông báo tại chỗ</h2>
+              <div class="row">
+                <label class="row muted" style="font-size:0.78rem; gap:4px;">
+                  <input type="checkbox" id="chkTestSpeak" /> Đọc TTS
+                </label>
+                <button id="btnTestNotify" class="btn-sm btn-blue">Test Chuông</button>
+              </div>
+            </div>
+            <div id="ovNotifyList" class="item-list"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <details class="cfg-drawer" style="margin-top:0; border:none; background:transparent; padding:0;">
+            <summary style="font-size:0.98rem; color:#f8fafc; font-weight:650;">
+              <span>🎙️ Nghe thử Nhấn nhá &amp; Cảm xúc Giọng Trợ Lý TTS</span>
+              <span id="ttsAuditionStatus" class="badge b-info" style="font-weight:500;">Sẵn sàng</span>
+            </summary>
+            <div class="drawer-body">
+              <div class="row" style="margin-bottom:8px; gap:8px; flex-wrap:wrap;">
+                <select id="ttsAuditionMood" style="min-width:190px;">
+                  <option value="">Tâm trạng: Tự động theo câu</option>
+                  <optgroup label="Vui &amp; Tích cực">
+                    <option value="vui vẻ">😄 Vui vẻ</option>
+                    <option value="hào hứng">✨ Hào hứng</option>
+                    <option value="bất ngờ">😲 Bất ngờ / Ngạc nhiên</option>
+                  </optgroup>
+                  <optgroup label="Dịu dàng &amp; Yêu thương">
+                    <option value="ngọt ngào" selected>💗 Ngọt ngào / Dịu dàng</option>
+                    <option value="nũng nịu">🥹 Nũng nịu / Làm nũng</option>
+                    <option value="ngại ngùng">😳 Ngại ngùng / E thẹn</option>
+                    <option value="lo lắng">🫧 Lo lắng / Quan tâm</option>
+                  </optgroup>
+                  <optgroup label="Trêu &amp; Cảm xúc mạnh">
+                    <option value="cà khịa">😏 Cà khịa / Trêu</option>
+                    <option value="dỗi nhẹ">🥺 Dỗi nhẹ / Hờn</option>
+                    <option value="cộc nhẹ">😤 Cộc nhẹ</option>
+                    <option value="tủi thân">💧 Tủi thân / Buồn</option>
+                  </optgroup>
+                  <optgroup label="Đêm &amp; Lắng đọng">
+                    <option value="thì thầm khuya">🕯️ Thì thầm khuya</option>
+                    <option value="lười biếng">🌙 Lười biếng / Buồn ngủ</option>
+                    <option value="bình yên">🌿 Bình yên / Tự nhiên</option>
+                  </optgroup>
+                </select>
+                <select id="ttsAuditionTod" style="min-width:130px;">
+                  <option value="">Khung giờ: Tự động</option>
+                  <option value="morning">🌅 Sáng tươi</option>
+                  <option value="evening">🌆 Tối ấm</option>
+                  <option value="late_night">🌙 Khuya êm dịu</option>
+                </select>
+                <label class="row muted" style="font-size:0.82rem; gap:6px;" title="Cường độ diễn cảm (0.60x nhẹ nhàng – 1.35x giàu cảm xúc)">
+                  Cường độ: <input type="range" id="ttsAuditionIntensity" min="0.60" max="1.35" step="0.05" value="1.00" style="width:92px;" />
+                  <span id="ttsAuditionIntensityVal">1.00x</span>
+                </label>
+                <label class="row muted" style="font-size:0.82rem; gap:4px;">
+                  <input type="checkbox" id="chkTtsProsody" checked /> Bật Prosody DSP
+                </label>
+              </div>
+              <div class="row" style="margin-bottom:8px; gap:4px; flex-wrap:wrap;">
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [cười]">+ [cười]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [cười khúc khích]">+ [cười khúc khích]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [thở dài]">+ [thở dài]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [hắng giọng]">+ [hắng giọng]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [hứ]">+ [hứ]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [ngập ngừng]">+ [ngập ngừng]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [ngạc nhiên]">+ [ngạc nhiên]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" [thì thầm]">+ [thì thầm]</button>
+                <button type="button" class="btn-sm tts-cue-btn" data-cue=" *nhấn*">+ *nhấn*</button>
+              </div>
+              <div class="row" style="gap:8px; flex-wrap:wrap;">
+                <input id="ttsAuditionText" value="Chào buổi tối! Hệ thống nhà thông minh đã sẵn sàng [cười], nhiệt độ phòng hiện rất dễ chịu." style="flex:1; min-width:240px;" />
+                <button type="button" id="btnTtsAuditionBrowser" class="btn-sm btn-pink">▶ Nghe trình duyệt</button>
+                <button type="button" id="btnTtsAuditionEsp32" class="btn-sm btn-blue">🔊 Đọc loa ESP32</button>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px;">
+            <h2>🖥️ Sức khỏe Hệ thống OpenStick</h2>
+            <div class="row">
+              <span id="sysTempBadge" class="badge b-info">🌡️ —°C</span>
+              <span id="sysDspBadge" class="badge b-info">DSP: —</span>
+              <span id="sysAuditBadge" class="badge b-ok">Logic Audit: —</span>
+              <span id="sysUptimeBadge" class="badge b-info">⏱️ —</span>
+            </div>
+          </div>
+          <div id="ovSystemGrid" class="grid grid-3">
+            <div class="muted">Đang đọc thông số phần cứng...</div>
           </div>
         </div>
       </section>
@@ -841,6 +995,56 @@
             </form>
           </div>
         </div>
+
+        <div class="card" style="margin-top:12px;">
+          <div class="row between" style="margin-bottom:8px; gap:8px; flex-wrap:wrap;">
+            <div>
+              <h2>🌐 Router Wi-Fi (OpenWrt / Multi-WAN)</h2>
+              <div id="routerSubtitle" class="muted" style="font-size:0.82rem;">Chưa kết nối tới Router OpenWrt</div>
+            </div>
+            <div class="row" style="gap:6px; flex-wrap:wrap;">
+              <span id="routerStatusBadge" class="badge b-info">Chờ kiểm tra</span>
+              <button id="btnRouterRefresh" type="button" class="btn-sm">🔄 Làm mới</button>
+              <button id="btnRouterWakePc" type="button" class="btn-sm btn-blue">🖥️ Bật PC (WoL)</button>
+              <button id="btnRouterReboot" type="button" class="btn-sm btn-danger">⚠️ Reboot Router</button>
+            </div>
+          </div>
+          <div id="routerUplinksRow" class="row" style="gap:6px; flex-wrap:wrap; margin-bottom:10px;"></div>
+          <div class="table-wrap" style="margin-bottom:12px;">
+            <table>
+              <thead>
+                <tr><th>Thiết bị</th><th>IP / MAC</th><th>Wi-Fi / Sóng</th><th>Lưu lượng</th><th>An toàn</th></tr>
+              </thead>
+              <tbody id="routerClientsBody">
+                <tr><td colspan="5" class="muted">Đang tải danh sách kết nối Wi-Fi từ Router...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <form id="routerConfigForm" style="border-top:1px solid var(--border); padding-top:10px;">
+            <div class="row" style="gap:8px; flex-wrap:wrap;">
+              <div class="field" style="flex:1; min-width:170px;">
+                <label for="rtUrlInput">Router URL</label>
+                <input id="rtUrlInput" class="mono" placeholder="http://192.168.1.1" />
+              </div>
+              <div class="field" style="flex:1; min-width:110px;">
+                <label for="rtUserInput">Tài khoản</label>
+                <input id="rtUserInput" class="mono" placeholder="root" />
+              </div>
+              <div class="field" style="flex:1; min-width:140px;">
+                <label for="rtPassInput">Mật khẩu ubus (trống = giữ cũ)</label>
+                <input id="rtPassInput" type="password" placeholder="••••" />
+              </div>
+            </div>
+            <div class="row between" style="margin-top:6px; gap:10px; flex-wrap:wrap;">
+              <div class="row" style="gap:14px; flex-wrap:wrap; font-size:0.84rem;">
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="rtEnabledChk" /> Bật giám sát Router</label>
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="rtUnknownChk" /> Báo thiết bị lạ vào Wi-Fi</label>
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="rtPresenceChk" /> Tăng độ chuẩn Presence điện thoại</label>
+              </div>
+              <button type="submit" class="btn-primary btn-sm">Lưu cấu hình Router</button>
+            </div>
+          </form>
+        </div>
       </section>
 
       <!-- TAB 6: BACKUPS & WATCHDOG LOG -->
@@ -1071,6 +1275,12 @@
           renderHabits();
         }
       });
+      es.addEventListener("router_update", (ev) => {
+        if (state.overview) {
+          state.overview.router = JSON.parse(ev.data);
+          renderRouter();
+        }
+      });
       es.onerror = () => {
         $("hdrSseBadge").className = "badge b-warn";
         $("hdrSseBadge").textContent = "SSE: đang nối lại...";
@@ -1083,6 +1293,104 @@
       away: ["🚶 Đang ra ngoài", "b-warn"],
       sleeping_late: ["🌙 Đêm khuya / Đang ngủ", "b-pink"],
       unconfigured: ["⚙️ Chưa gán thiết bị MAC", "b-warn"],
+    };
+
+    const fmtClockVn = (ts) => ts
+      ? new Date(ts * 1000).toLocaleTimeString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", hour: "2-digit", minute: "2-digit" })
+      : "";
+
+    function renderQuickHub() {
+      const ov = state.overview || {};
+      const p = ov.presence || {};
+      const [pLabel, pClass] = PRESENCE_LABELS[p.state] || [p.state || "—", "b-info"];
+      const qp = $("quickPresenceBadge");
+      if (qp) {
+        qp.className = `badge ${pClass}`;
+        qp.textContent = pLabel;
+      }
+
+      const jb = ov.jukebox || {};
+      const dht = jb.dht11 || ov.dht11;
+      const qd = $("quickDhtBadge");
+      if (qd) {
+        if (dht && dht.temperature_c != null && dht.humidity_pct != null) {
+          qd.className = "badge b-info";
+          qd.textContent = `🌡️ ${dht.temperature_c}°C • 💧 ${dht.humidity_pct}%`;
+        } else {
+          qd.className = "badge b-warn";
+          qd.textContent = "🌡️ Chờ DHT11";
+        }
+      }
+
+      const qa = $("quickAudioBadge");
+      if (qa) {
+        const cur = jb.current_track;
+        const live = jb.live_stream || {};
+        if (live.active) {
+          const shortLbl = (live.label || "Live Audio").slice(0, 22);
+          qa.className = `badge ${live.paused ? "b-warn" : "b-info"}`;
+          qa.textContent = `${live.paused ? "⏸️" : "📡"} ${shortLbl}`;
+        } else if (jb.status === "playing" && cur && cur.title) {
+          const shortTitle = cur.title.length > 22 ? cur.title.slice(0, 21) + "…" : cur.title;
+          qa.className = "badge b-pink";
+          qa.textContent = `▶️ ${shortTitle}`;
+        } else if (jb.esp32?.online) {
+          qa.className = "badge b-ok";
+          qa.textContent = "🔊 Loa sẵn sàng";
+        } else {
+          qa.className = "badge b-warn";
+          qa.textContent = "🔇 Loa chờ";
+        }
+      }
+    }
+
+    window.runQuickSleepScene = async () => {
+      const ov = state.overview || {};
+      const tasks = [];
+      const plugs = ov.plugs || [];
+      for (const p of plugs) {
+        const isLight = p.auto_sleep || /đèn|light|lamp/i.test(p.name || "");
+        if (p.online && p.is_on && isLight) {
+          tasks.push(window.plugCtrl(p.mac, "power", false));
+        }
+      }
+      const fan = ov.fan;
+      if (fan && fan.online && fan.state?.is_on) {
+        if (Number(fan.state.speed_pct || 0) > 0) {
+          tasks.push(window.fanCtrl("sleep_ramp"));
+        } else {
+          tasks.push(window.fanCtrl("timer", false, { delay_minutes: 30 }));
+        }
+      }
+      const jb = ov.jukebox || {};
+      if (jb.status === "playing" || jb.status === "paused") {
+        tasks.push(window.jukeboxCtrl("sleep_timer", 30));
+      }
+      if (!tasks.length) {
+        showToast("🌙 Chế độ Đi ngủ", "Không có đèn hay thiết bị cần hạ ngủ lúc này.");
+        return;
+      }
+      await Promise.allSettled(tasks);
+      showToast("🌙 Đã bật Chế độ Đi ngủ", "Đã tắt đèn theo cấu hình, hạ dần quạt & hẹn tắt nhạc 30p (nếu đang bật).");
+    };
+
+    window.runQuickAllOff = async () => {
+      if (!confirm("Tắt toàn bộ ổ cắm BroadLink, quạt BLDC và dừng loa ngay bây giờ?")) return;
+      const ov = state.overview || {};
+      const tasks = [];
+      for (const p of (ov.plugs || [])) {
+        if (p.online && p.is_on !== false) {
+          tasks.push(window.plugCtrl(p.mac, "power", false));
+        }
+      }
+      if (ov.fan?.online && ov.fan?.state?.is_on) {
+        tasks.push(window.fanCtrl("power", false));
+      }
+      if (ov.jukebox?.status === "playing" || ov.jukebox?.status === "paused") {
+        tasks.push(window.jukeboxCtrl("stop"));
+      }
+      await Promise.allSettled(tasks);
+      showToast("⏻ Đã tắt hết thiết bị", "Đã gửi lệnh tắt cho toàn bộ thiết bị đang chạy.");
     };
 
     function renderOverview() {
@@ -1115,6 +1423,11 @@
       $("ovWdDetail").innerHTML =
         `GW: ${wd.gateway_ok ? "OK" : "LỖI"} • Net: ${wd.internet_ok ? "OK" : "LỖI"} • DNS: ${wd.dns_ok ? "OK" : "LỖI"}<br>` +
         `Tự phục hồi: ${wd.heals_count || 0} lần • Sự cố: ${wd.outages_count || 0}`;
+      const rt = ov.router || {};
+      const rtUpl = (rt.uplinks || []).map((u) => `${u.name}:${u.mwan_status || (u.up ? "up" : "down")}`).join(" • ");
+      $("ovRouterLine").innerHTML = rt.online
+        ? `🌐 Router: <strong>${rt.clients_count || 0}</strong> máy (${rt.unknown_count || 0} lạ)${rtUpl ? ` • ${esc(rtUpl)}` : ""}`
+        : (rt.configured ? `🌐 Router: Ngoại tuyến` : `🌐 Router: Chưa cấu hình`);
 
       const prof = ov.profile || {};
       const q = ov.quota || {};
@@ -1144,14 +1457,20 @@
           </div>`).join("")
         : `<div class="muted">Chưa có thông báo nội bộ mới trong phiên này.</div>`;
 
+      renderQuickHub();
       renderSystemHealth(ov.system);
       renderJukebox();
       renderFan();
       renderPlugs();
       renderHabits();
+      renderRouter();
       if (!window._fanFormInitialized) {
         syncFanForm(ov.fan?.settings || ov.settings?.fan);
         window._fanFormInitialized = true;
+      }
+      if (!window._routerFormInitialized) {
+        syncRouterForm(ov.router?.settings || ov.settings?.router);
+        window._routerFormInitialized = true;
       }
     }
 
@@ -1195,6 +1514,20 @@
       $("chkFanSleepVoice").checked = Boolean(cfg.sleep_voice);
     }
 
+    function formatTimerSequenceHtml(timers, mac = "") {
+      if (!Array.isArray(timers) || !timers.length) return "";
+      const parts = timers.map((tm) => {
+        const verb = tm.action === "on" ? "Bật" : (tm.action === "set_speed" ? "Chỉnh tốc độ" : "Tắt");
+        const clock = fmtClockVn(tm.due_at);
+        const minsLeft = Math.max(1, Math.ceil(Number(tm.remaining_sec || 0) / 60));
+        return `${verb} ${clock || `${minsLeft}p`} (${minsLeft}p)`;
+      });
+      const cancelBtn = mac
+        ? `<button type="button" class="btn-sm" style="padding:1px 6px;margin-left:5px;" data-mac="${esc(mac)}" onclick="plugCtrl(this.dataset.mac, 'cancel_timer')">✕</button>`
+        : `<button type="button" class="btn-sm" style="padding:1px 6px;margin-left:5px;" onclick="fanCtrl('cancel_timer')">✕</button>`;
+      return `<span class="badge b-pink">⏱️ ${esc(parts.join(" → "))} ${cancelBtn}</span>`;
+    }
+
     function renderFan() {
       const fan = state.overview?.fan;
       if (!fan) return;
@@ -1204,6 +1537,8 @@
       const onlineBadge = $("fanOnlineBadge");
       const freqBadge = $("fanFreqBadge");
       const autoBadge = $("fanAutoBadge");
+      const primaryCard = $("fanPrimaryCard");
+      const powerBtn = $("btnFanPower");
 
       if (!fan.configured) {
         onlineBadge.className = "badge b-warn";
@@ -1217,19 +1552,29 @@
       }
 
       if (st) {
-        freqBadge.className = `badge ${st.is_on ? "b-ok" : "b-info"}`;
-        freqBadge.textContent = `${st.is_on ? "BẬT" : "TẮT"} • ${st.speed_pct}% (${st.output_freq} Hz) • ${st.mode_label || (st.mode === 1 ? "Gió tự nhiên" : "Cố định")}`;
+        const isOn = Boolean(st.is_on);
+        if (primaryCard) primaryCard.classList.toggle("is-on", isOn);
+        freqBadge.className = `badge ${isOn ? "b-ok" : "b-info"}`;
+        freqBadge.textContent = `${isOn ? "BẬT" : "TẮT"} • ${st.speed_pct}% (${st.output_freq} Hz) • ${st.mode_label || (st.mode === 1 ? "Gió tự nhiên" : "Cố định")}`;
         if (document.activeElement !== $("fanSpeedSlider")) {
           const pctShown = Math.min(maxPct, Number(st.speed_pct ?? 0));
           $("fanSpeedSlider").value = pctShown;
           $("fanSpeedVal").textContent = `${st.speed_pct ?? 0}% • ${pctToFanHz(st.speed_pct)} Hz`;
         }
-        $("btnFanPower").textContent = st.is_on ? "⏻ Tắt quạt" : "⏻ Bật quạt";
+        if (powerBtn) {
+          powerBtn.className = `btn-power-lg ${isOn ? "btn-power-is-on" : "btn-power-is-off"}`;
+          powerBtn.textContent = isOn ? "🟢 Quạt ĐANG BẬT • Chạm tắt" : "⏻ Quạt ĐANG TẮT • Chạm bật";
+        }
         $("btnFanModeFixed").className = `btn-sm ${st.mode === 0 ? "btn-blue" : ""}`;
         $("btnFanModeNatural").className = `btn-sm ${st.mode === 1 ? "btn-blue" : ""}`;
       } else {
+        if (primaryCard) primaryCard.classList.remove("is-on");
         freqBadge.className = "badge b-info";
         freqBadge.textContent = "— Hz • —%";
+        if (powerBtn) {
+          powerBtn.className = "btn-power-lg btn-power-is-off";
+          powerBtn.textContent = "⏻ Bật / Tắt Quạt";
+        }
       }
 
       if (fan.ramping) {
@@ -1249,6 +1594,20 @@
         autoBadge.classList.add("hidden");
       }
 
+      const fanTimerBadge = $("fanTimerBadge");
+      const fanTimers = Array.isArray(fan.timers) && fan.timers.length
+        ? fan.timers
+        : (auto.timer ? [auto.timer] : []);
+      if (fanTimerBadge) {
+        if (fanTimers.length) {
+          fanTimerBadge.innerHTML = formatTimerSequenceHtml(fanTimers);
+          fanTimerBadge.classList.remove("hidden");
+        } else {
+          fanTimerBadge.innerHTML = "";
+          fanTimerBadge.classList.add("hidden");
+        }
+      }
+
       const statusLine = st
         ? `<strong>${st.is_on ? "🟢 Đang chạy" : "⚪ Đang tắt"}</strong> (${esc(st.status_text || st.status || "OK")}) • <strong>${st.speed_pct}%</strong> / <span class="mono">${st.output_freq} Hz</span> • Chế độ: <strong>${esc(st.mode_label)}</strong>`
         : `<span class="muted">${esc(fan.last_error || "Chưa đọc được trạng thái từ ESP-01S.")}</span>`;
@@ -1256,22 +1615,46 @@
       $("fanStateSummary").innerHTML = `<div>${statusLine}</div><div class="muted" style="font-size:0.78rem; margin-top:4px;">${metaLine}</div>`;
     }
 
-    window.fanCtrl = async (action, value = null) => {
+    window.fanCtrl = async (action, value = null, extra = {}) => {
       try {
         const res = await api("/api/fan/control", {
           method: "POST",
-          body: JSON.stringify({ action, value }),
+          body: JSON.stringify({ action, value, ...(extra || {}) }),
         });
         if (state.overview && res.fan) {
           state.overview.fan = res.fan;
           renderFan();
+          renderQuickHub();
+        }
+        if (action === "timer" || Number(extra?.duration_minutes || 0) > 0) {
+          showToast("🌬️ Hẹn giờ Quạt BLDC", "Đã cập nhật lịch chạy quạt.");
+        } else if (action === "cancel_timer") {
+          showToast("🌬️ Quạt BLDC", "Đã hủy hẹn giờ quạt.");
         }
       } catch (e) {
         showToast("Lỗi điều khiển Quạt", e.message, "error");
       }
     };
 
-    function renderPlugs() {
+    window.submitFanCustomTimer = () => {
+      const t = ($("fanTimerTime")?.value || "").trim();
+      const act = $("fanTimerAction")?.value || "on";
+      const dur = Number($("fanTimerDur")?.value || 0);
+      if (!t) return showToast("Thiếu giờ hẹn", "Hãy chọn giờ HH:MM trước.", "warning");
+      return window.fanCtrl("timer", act === "on", {
+        at_time_vn: t,
+        duration_minutes: (act === "on" && dur > 0) ? dur : 0,
+      });
+    };
+
+    window._openPlugDrawers = new Set();
+    window.togglePlugDrawer = (mac, isOpen) => {
+      if (!mac) return;
+      if (isOpen) window._openPlugDrawers.add(mac);
+      else window._openPlugDrawers.delete(mac);
+    };
+
+    function renderPlugs(force = false) {
       const plugs = state.overview?.plugs || [];
       const badge = $("plugsCountBadge");
       if (badge) {
@@ -1281,69 +1664,121 @@
       }
       const grid = $("plugsGrid");
       if (!grid) return;
+      const ae = document.activeElement;
+      if (!force && ae && ae.closest && ae.closest("#plugsGrid") && ae.classList?.contains("plug-custom-inp")) {
+        return;
+      }
       if (!plugs.length) {
         grid.innerHTML = `<div class="muted">Chưa thấy ổ cắm BroadLink nào. Bấm "Quét ổ cắm" khi ổ đã tắt Lock Device trên app.</div>`;
         return;
       }
-      grid.innerHTML = plugs.map((p) => {
+      grid.innerHTML = plugs.map((p, idx) => {
+        const isOn = Boolean(p.is_on);
         const stBadge = p.locked
           ? `<span class="badge b-err">Đang khóa LAN</span>`
           : !p.online
             ? `<span class="badge b-warn">Offline</span>`
-            : p.is_on
+            : isOn
               ? `<span class="badge b-ok">🟢 Đang BẬT</span>`
               : `<span class="badge b-info">⚪ Đang TẮT</span>`;
-        const btnCls = p.is_on ? "btn-danger" : "btn-blue";
-        const btnLabel = p.is_on ? "⏻ Tắt ngay" : "⏻ Bật ngay";
-        const tm = p.timer
-          ? `<span class="badge b-pink">⏱️ ${p.timer.action === "on" ? "Bật" : "Tắt"} sau ${Math.max(1, Math.ceil(p.timer.remaining_sec / 60))}p <button type="button" class="btn-sm" style="padding:1px 5px;margin-left:4px;" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'cancel_timer')">✕</button></span>`
+        const btnCls = isOn ? "btn-power-is-on" : "btn-power-is-off";
+        const btnLabel = isOn ? "🟢 ĐANG BẬT • Chạm tắt" : "⏻ ĐANG TẮT • Chạm bật";
+        const timers = Array.isArray(p.timers) && p.timers.length ? p.timers : (p.timer ? [p.timer] : []);
+        const timerHtml = timers.length
+          ? `<div style="margin-bottom:8px;">${formatTimerSequenceHtml(timers, p.mac)}</div>`
           : "";
+        const autoTags = [
+          p.auto_away ? "Đi vắng tắt" : "",
+          p.auto_home ? "Về bật" : "",
+          p.auto_sleep ? "Ngủ tắt" : "",
+        ].filter(Boolean);
+        const autoSummary = autoTags.length ? autoTags.join(" • ") : "Chưa bật tự động";
+        const drawerOpen = window._openPlugDrawers.has(p.mac) ? "open" : "";
         return `
-        <div class="item-card">
-          <div class="row between" style="margin-bottom:6px;">
+        <div class="device-card ${isOn ? "is-on" : ""}">
+          <div class="row between" style="margin-bottom:8px;">
             <div class="row" style="gap:6px;">
-              <strong>${esc(p.icon || "🔌")} ${esc(p.name)}</strong>
+              <strong style="font-size:1rem;">${esc(p.icon || "🔌")} ${esc(p.name)}</strong>
               <button type="button" class="btn-sm" data-mac="${esc(p.mac)}" data-name="${esc(p.name)}" onclick="renamePlug(this.dataset.mac, this.dataset.name)" title="Đổi tên">✏️</button>
             </div>
             ${stBadge}
           </div>
-          <div class="muted mono" style="font-size:0.78rem; margin-bottom:8px;">
-            ${esc(p.ip || "—")} • ${esc(p.mac)}
+          <div style="margin-bottom:8px;">
+            <button type="button" style="width:100%;" class="btn-power-lg ${btnCls}" data-mac="${esc(p.mac)}" data-next="${isOn ? "0" : "1"}" onclick="plugCtrl(this.dataset.mac, 'power', this.dataset.next === '1')">${btnLabel}</button>
           </div>
-          <div class="row" style="margin-bottom:8px;">
-            <button type="button" class="btn-sm ${btnCls}" data-mac="${esc(p.mac)}" data-next="${p.is_on ? "0" : "1"}" onclick="plugCtrl(this.dataset.mac, 'power', this.dataset.next === '1')">${btnLabel}</button>
-            <button type="button" class="btn-sm" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'timer', false, 15)">🌙 Tắt 15p</button>
-            <button type="button" class="btn-sm" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'timer', false, 30)">🌙 30p</button>
-            ${tm}
+          <div class="row" style="margin-bottom:6px; gap:6px;">
+            <button type="button" class="btn-pill" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'power', true, null, {duration_minutes: 10})">⚡ Bật 10p</button>
+            <button type="button" class="btn-pill" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'power', true, null, {duration_minutes: 30})">⚡ Bật 30p</button>
+            <button type="button" class="btn-pill" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'timer', false, 15)">🌙 Tắt 15p</button>
+            <button type="button" class="btn-pill" data-mac="${esc(p.mac)}" onclick="plugCtrl(this.dataset.mac, 'timer', false, 30)">🌙 Tắt 30p</button>
           </div>
-          <div class="row" style="font-size:0.8rem; gap:12px;">
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" ${p.auto_away ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_away: this.checked})" /> Đi vắng tắt
-            </label>
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" ${p.auto_home ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_home: this.checked})" /> Về nhà bật
-            </label>
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" ${p.auto_sleep ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_sleep: this.checked})" /> Ngủ khuya tắt
-            </label>
-          </div>
+          ${timerHtml}
+          <details class="cfg-drawer" ${drawerOpen} data-mac="${esc(p.mac)}" ontoggle="togglePlugDrawer(this.dataset.mac, this.open)">
+            <summary>
+              <span>⚙️ Hẹn giờ HH:MM &amp; Tự động hóa</span>
+              <span class="muted" style="font-size:0.74rem;">${esc(autoSummary)}</span>
+            </summary>
+            <div class="drawer-body">
+              <div class="row" style="margin-bottom:8px; gap:6px;">
+                <input id="plugAt_${idx}" type="time" value="22:00" class="plug-custom-inp" style="width:100px;" />
+                <select id="plugAct_${idx}" class="plug-custom-inp">
+                  <option value="on">Bật</option>
+                  <option value="off">Tắt</option>
+                </select>
+                <input id="plugDur_${idx}" type="number" min="0" max="720" value="10" class="plug-custom-inp" style="width:66px;" title="Tự tắt sau X phút (0 = giữ nguyên)" />
+                <span class="muted" style="font-size:0.78rem;">phút</span>
+                <button type="button" class="btn-sm btn-blue" data-mac="${esc(p.mac)}" data-idx="${idx}" onclick="submitPlugCustomTimer(this.dataset.mac, Number(this.dataset.idx))">Đặt lịch</button>
+              </div>
+              <div class="row" style="font-size:0.8rem; gap:12px; margin-bottom:6px;">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                  <input type="checkbox" ${p.auto_away ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_away: this.checked})" /> Đi vắng tắt
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                  <input type="checkbox" ${p.auto_home ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_home: this.checked})" /> Về nhà bật
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                  <input type="checkbox" ${p.auto_sleep ? "checked" : ""} data-mac="${esc(p.mac)}" onchange="plugCfg(this.dataset.mac, {auto_sleep: this.checked})" /> Ngủ khuya tắt
+                </label>
+              </div>
+              <div class="muted mono" style="font-size:0.76rem;">
+                ${esc(p.ip || "—")} • ${esc(p.mac)}
+              </div>
+            </div>
+          </details>
         </div>`;
       }).join("");
     }
 
-    window.plugCtrl = async (mac, action, value = null, delayMinutes = null) => {
+    window.plugCtrl = async (mac, action, value = null, delayMinutes = null, extra = {}) => {
       try {
         const res = await api("/api/plugs/control", {
           method: "POST",
-          body: JSON.stringify({ mac, action, value, delay_minutes: delayMinutes }),
+          body: JSON.stringify({ mac, action, value, delay_minutes: delayMinutes, ...(extra || {}) }),
         });
         if (state.overview && res.plugs) {
           state.overview.plugs = res.plugs;
-          renderPlugs();
+          renderPlugs(true);
+          renderQuickHub();
+        }
+        if (action === "timer" || Number(extra?.duration_minutes || 0) > 0) {
+          showToast("🔌 Hẹn giờ Ổ cắm", "Đã cập nhật lịch bật/tắt ổ cắm.");
+        } else if (action === "cancel_timer") {
+          showToast("🔌 Ổ cắm BroadLink", "Đã hủy hẹn giờ.");
         }
       } catch (e) {
         showToast("Lỗi ổ cắm BroadLink", e.message, "error");
       }
+    };
+
+    window.submitPlugCustomTimer = (mac, idx) => {
+      const t = ($(`plugAt_${idx}`)?.value || "").trim();
+      const act = $(`plugAct_${idx}`)?.value || "on";
+      const dur = Number($(`plugDur_${idx}`)?.value || 0);
+      if (!t) return showToast("Thiếu giờ hẹn", "Hãy chọn giờ HH:MM trước.", "warning");
+      return window.plugCtrl(mac, "timer", act === "on", null, {
+        at_time_vn: t,
+        duration_minutes: (act === "on" && dur > 0) ? dur : 0,
+      });
     };
 
     window.plugCfg = async (mac, patch) => {
@@ -1538,6 +1973,30 @@
       }
 
       const alarms = jb.alarms || [];
+      const jbAlarmCount = $("jbAlarmCountBadge");
+      if (jbAlarmCount) {
+        jbAlarmCount.textContent = `${alarms.length} hẹn`;
+        jbAlarmCount.className = `badge ${alarms.length ? "b-pink" : "b-info"}`;
+      }
+      renderQuickHub();
+      const live = jb.live_stream || {};
+      const liveBanner = $("jbLiveBanner");
+      if (liveBanner) {
+        if (live.active) {
+          liveBanner.classList.remove("hidden");
+          $("jbLiveTitle").textContent = `${live.paused ? "⏸️ Tạm dừng" : "📡 Đang phát Live"}: ${live.label || "WebSocket"}`;
+          $("jbLiveMeta").textContent = `Nguồn: ${live.source || "web"} • ${live.client_ip || "LAN"} • tự tắt sau 5p im lặng`;
+        } else {
+          liveBanner.classList.add("hidden");
+        }
+      }
+      const isPcLive = Boolean(live.active && live.source === "pc_loopback");
+      const isLocalCast = Boolean(window._liveCast?.active);
+      if ($("btnQuickPcLive")) $("btnQuickPcLive").textContent = isPcLive ? "⏹️ Tắt Tiếng PC" : "💻 Tiếng PC → Loa";
+      if ($("btnJbPcLive")) $("btnJbPcLive").textContent = isPcLive ? "⏹️ Tắt Tiếng PC (8091)" : "💻 Tiếng PC Bridge (8091)";
+      if ($("btnQuickWebCast")) $("btnQuickWebCast").textContent = isLocalCast ? "⏹️ Dừng Web Cast" : "📡 Cast Tab → Loa";
+      if ($("btnJbWebCast")) $("btnJbWebCast").textContent = isLocalCast ? "⏹️ Dừng Cast Trình duyệt" : "📡 Cast Trình duyệt / Hệ thống";
+
       $("jbAlarmList").innerHTML = alarms.length
         ? alarms.map((a) => {
           const isMusic = a.kind === "music";
@@ -2390,7 +2849,203 @@
 
     $("btnJbToggle").addEventListener("click", () => jukeboxCtrl("toggle"));
     $("btnJbSkip").addEventListener("click", () => jukeboxCtrl("skip"));
-    $("btnJbStop").addEventListener("click", () => jukeboxCtrl("stop"));
+    $("btnJbStop").addEventListener("click", () => stopAnyLiveSpeaker().catch(() => jukeboxCtrl("stop")));
+
+    window._liveCast = { active: false, source: "", ws: null, ctx: null, proc: null, srcNode: null, gain: null, stream: null, audioEl: null, objUrl: "" };
+
+    window.stopWebAudioCast = async (notifyServer = false) => {
+      const c = window._liveCast;
+      const wasActive = Boolean(c.active || c.ws);
+      c.active = false;
+      c.source = "";
+      try { if (c.proc) { c.proc.onaudioprocess = null; c.proc.disconnect(); } } catch (_) {}
+      try { if (c.srcNode) c.srcNode.disconnect(); } catch (_) {}
+      try { if (c.gain) c.gain.disconnect(); } catch (_) {}
+      try { if (c.stream) c.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+      try { if (c.audioEl) { c.audioEl.pause(); c.audioEl.src = ""; } } catch (_) {}
+      if (c.objUrl) { try { URL.revokeObjectURL(c.objUrl); } catch (_) {} }
+      try {
+        if (c.ws) {
+          if (c.ws.readyState === WebSocket.OPEN) {
+            try { c.ws.send(JSON.stringify({ type: "stop" })); } catch (_) {}
+          }
+          c.ws.close();
+        }
+      } catch (_) {}
+      try { if (c.ctx && c.ctx.state !== "closed") await c.ctx.close(); } catch (_) {}
+      window._liveCast = { active: false, source: "", ws: null, ctx: null, proc: null, srcNode: null, gain: null, stream: null, audioEl: null, objUrl: "" };
+      if (notifyServer && wasActive) {
+        await jukeboxCtrl("stop_live");
+      } else {
+        renderJukebox();
+      }
+    };
+
+    window.stopAnyLiveSpeaker = async () => {
+      await window.stopWebAudioCast(false);
+      await jukeboxCtrl("stop");
+    };
+
+    window.togglePcBridgeLive = async () => {
+      const live = state.overview?.jukebox?.live_stream || {};
+      if (live.active && live.source === "pc_loopback") {
+        await jukeboxCtrl("stop_live");
+        showToast("💻 PC Bridge Live", "Đã ngắt luồng âm thanh Windows.");
+        return;
+      }
+      await window.stopWebAudioCast(false);
+      await jukeboxCtrl("start_pc_live");
+      showToast("💻 Loa Không Dây PC (8091)", "Đang phát toàn bộ âm thanh Windows ra loa ESP32-C3.");
+    };
+
+    async function _streamNodeToLiveWs({ audioCtx, sourceNode, sourceKind, label, stream = null, audioEl = null, objUrl = "" }) {
+      const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProto}//${location.host}/api/jukebox/live_ws?source=${encodeURIComponent(sourceKind)}&label=${encodeURIComponent(label)}`;
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+
+      await new Promise((resolve, reject) => {
+        const tm = setTimeout(() => reject(new Error("Quá thời gian mở WebSocket Live.")), 5000);
+        ws.onopen = () => { clearTimeout(tm); resolve(); };
+        ws.onerror = () => { clearTimeout(tm); reject(new Error("Không kết nối được WebSocket Loa Live.")); };
+      });
+
+      const proc = audioCtx.createScriptProcessor(2048, 2, 1);
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0;
+
+      const step = Math.max(1.0, audioCtx.sampleRate / 24000.0);
+      let phase = 0.0;
+      let prevSample = 0.0;
+      let pendingInt16 = [];
+
+      proc.onaudioprocess = (ev) => {
+        if (!window._liveCast.active || ws.readyState !== WebSocket.OPEN) return;
+        const ibuf = ev.inputBuffer;
+        const ch0 = ibuf.getChannelData(0);
+        const ch1 = ibuf.numberOfChannels > 1 ? ibuf.getChannelData(1) : ch0;
+        for (let i = 0; i < ch0.length; i++) {
+          const mono = (ch0[i] + ch1[i]) * 0.5;
+          phase += 1.0;
+          while (phase >= step) {
+            phase -= step;
+            const frac = Math.max(0.0, Math.min(1.0, 1.0 - phase));
+            const interp = prevSample + (mono - prevSample) * frac;
+            const clipped = Math.max(-1.0, Math.min(1.0, interp));
+            pendingInt16.push(clipped < 0 ? Math.round(clipped * 32768) : Math.round(clipped * 32767));
+          }
+          prevSample = mono;
+        }
+        while (pendingInt16.length >= 480) {
+          const chunk = pendingInt16.splice(0, 480);
+          if (ws.bufferedAmount < 65536) {
+            const arr = new Int16Array(chunk);
+            ws.send(arr.buffer);
+          }
+        }
+      };
+
+      sourceNode.connect(proc);
+      proc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      window._liveCast = { active: true, source: sourceKind, ws, ctx: audioCtx, proc, srcNode: sourceNode, gain, stream, audioEl, objUrl };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "live_stopped") {
+            window.stopWebAudioCast(false);
+            if (msg.reason === "preempted" || msg.reason === "preempted_or_timeout") {
+              showToast("📡 Loa Live đã chuyển", "Một máy khác vừa nhận loa hoặc quá 5p im lặng.", "info");
+            }
+          }
+        } catch (_) {}
+      };
+      ws.onclose = () => {
+        if (window._liveCast.ws === ws) window.stopWebAudioCast(false);
+      };
+      renderJukebox();
+    }
+
+    window.toggleWebAudioCast = async () => {
+      if (window._liveCast.active) {
+        await window.stopWebAudioCast(true);
+        showToast("📡 Web Cast", "Đã ngắt kết nối Loa Không Dây trình duyệt.");
+        return;
+      }
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== "function") {
+        showToast(
+          "Trình duyệt chặn getDisplayMedia trên HTTP",
+          "Hãy dùng nút '💻 Tiếng PC Bridge (8091)' hoặc '📁 Cast File nhạc', hoặc bật chrome://flags/#unsafely-treat-insecure-origin-as-secure cho " + location.origin,
+          "warning"
+        );
+        return;
+      }
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        const audioTracks = stream.getAudioTracks();
+        if (!audioTracks.length) {
+          stream.getTracks().forEach((t) => t.stop());
+          showToast("Thiếu nguồn âm thanh", "Khi chọn màn hình/Tab, hãy tích thêm ô 'Share system/tab audio' nhé!", "warning");
+          return;
+        }
+        stream.getVideoTracks().forEach((t) => t.stop());
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+        const srcNode = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
+        const trackLbl = audioTracks[0].label || "Tab / Máy tính";
+        await _streamNodeToLiveWs({
+          audioCtx,
+          sourceNode: srcNode,
+          sourceKind: "web_cast",
+          label: `📡 Cast: ${trackLbl}`,
+          stream,
+        });
+        audioTracks[0].onended = () => window.stopWebAudioCast(true);
+        showToast("📡 Đang Cast ra Loa ESP32", trackLbl);
+      } catch (e) {
+        if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {} }
+        if (e && e.name !== "NotAllowedError") {
+          showToast("Lỗi Web Cast", e.message || String(e), "error");
+        }
+      }
+    };
+
+    $("jbCastFileInput")?.addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      e.target.value = "";
+      try {
+        await window.stopWebAudioCast(false);
+        const objUrl = URL.createObjectURL(file);
+        const audioEl = new Audio(objUrl);
+        audioEl.crossOrigin = "anonymous";
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+        const srcNode = audioCtx.createMediaElementSource(audioEl);
+        await _streamNodeToLiveWs({
+          audioCtx,
+          sourceNode: srcNode,
+          sourceKind: "web_file",
+          label: `📁 ${file.name}`,
+          audioEl,
+          objUrl,
+        });
+        audioEl.onended = () => window.stopWebAudioCast(true);
+        await audioEl.play();
+        showToast("📁 Đang phát File ra Loa", file.name);
+      } catch (err) {
+        await window.stopWebAudioCast(false);
+        showToast("Lỗi Cast File", err.message || String(err), "error");
+      }
+    });
     $("chkJbAutoDj").addEventListener("change", (e) => jukeboxCtrl("auto_dj", Boolean(e.target.checked)));
     $("chkJbVoiceAutoplay").addEventListener("change", (e) => jukeboxCtrl("voice_autoplay", Boolean(e.target.checked)));
     $("jbVolSlider").addEventListener("input", (e) => {
@@ -2741,6 +3396,139 @@
         $("btnHabitsAnalyze").disabled = false;
       }
     });
+
+    function syncRouterForm(cfg) {
+      if (!cfg) return;
+      if ($("rtUrlInput")) $("rtUrlInput").value = cfg.router_url || "http://192.168.1.1";
+      if ($("rtUserInput")) $("rtUserInput").value = cfg.username || "root";
+      if ($("rtPassInput")) $("rtPassInput").placeholder = cfg.has_password ? "(đã lưu — bỏ trống để giữ cũ)" : "Nhập mật khẩu OpenWrt";
+      if ($("rtEnabledChk")) $("rtEnabledChk").checked = cfg.raw_enabled !== false;
+      if ($("rtUnknownChk")) $("rtUnknownChk").checked = cfg.notify_unknown_device !== false;
+      if ($("rtPresenceChk")) $("rtPresenceChk").checked = cfg.boost_presence !== false;
+    }
+
+    function renderRouter() {
+      const rt = state.overview?.router || {};
+      const badge = $("routerStatusBadge");
+      const sub = $("routerSubtitle");
+      const uplRow = $("routerUplinksRow");
+      const tbody = $("routerClientsBody");
+      if (!badge || !tbody) return;
+
+      if (!rt.configured) {
+        badge.className = "badge b-warn";
+        badge.textContent = "Chưa cấu hình";
+        if (sub) sub.textContent = "Nhập mật khẩu OpenWrt bên dưới để hệ thống giám sát Router";
+        if (uplRow) uplRow.innerHTML = "";
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">Chưa cấu hình tài khoản/mật khẩu Router.</td></tr>`;
+        return;
+      }
+      if (!rt.enabled) {
+        badge.className = "badge b-info";
+        badge.textContent = "Đang tắt";
+        if (sub) sub.textContent = rt.router_url || "";
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">Giám sát Router đang tạm tắt.</td></tr>`;
+        return;
+      }
+      if (!rt.online) {
+        badge.className = "badge b-warn";
+        badge.textContent = "Ngoại tuyến";
+        if (sub) sub.textContent = rt.last_error || "Không kết nối được /ubus";
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">Không đọc được dữ liệu từ Router.</td></tr>`;
+        return;
+      }
+
+      const unk = Number(rt.unknown_count || 0);
+      badge.className = `badge ${unk > 0 ? "b-warn" : "b-ok"}`;
+      badge.textContent = `${rt.clients_count || 0} máy${unk > 0 ? ` • ${unk} lạ` : ""}`;
+      if (sub) {
+        sub.textContent = `${rt.model || "OpenWrt"} • Uptime ${rt.uptime_text || "—"} • Load ${rt.load_1m ?? "—"} • RAM ${rt.ram_used_pct ?? "—"}%` + (rt.conntrack_count != null ? ` • Conntrack ${rt.conntrack_count}` : "");
+      }
+      if (uplRow) {
+        const badges = (rt.uplinks || []).map((u) => {
+          const st = u.mwan_status || (u.up ? "online" : "offline");
+          const cls = st === "online" ? "b-ok" : (u.up ? "b-info" : "b-warn");
+          const wisp = u.wisp_ssid ? ` "${esc(u.wisp_ssid)}" (${u.signal_dbm} dBm)` : "";
+          const ip = u.ipv4 ? ` • ${esc(u.ipv4)}` : "";
+          return `<span class="badge ${cls}">${esc(u.name)}: ${esc(st)}${wisp}${ip}</span>`;
+        });
+        const rads = (rt.radios || []).map((r) => `<span class="badge b-info">${esc(r.band)} "${esc(r.ssid)}" ch.${r.channel ?? "?"} (${r.clients_count})</span>`);
+        uplRow.innerHTML = badges.concat(rads).join("");
+      }
+
+      const clients = rt.clients || [];
+      if (!clients.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">Chưa thấy thiết bị Wi-Fi nào đang kết nối.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = clients.map((c) => {
+        const actCell = c.protected
+          ? `<span class="badge b-info">🛡️ Bảo vệ</span>`
+          : (c.is_known
+            ? `<button type="button" class="btn-sm btn-danger" data-mac="${esc(c.mac)}" onclick="routerAction('kick_client', this.dataset.mac)">Ngắt 60s</button>`
+            : `<button type="button" class="btn-sm btn-blue" data-mac="${esc(c.mac)}" onclick="routerAction('trust_mac', this.dataset.mac)">Quen</button>
+               <button type="button" class="btn-sm btn-danger" data-mac="${esc(c.mac)}" onclick="routerAction('kick_client', this.dataset.mac)">Kick</button>`);
+        return `
+          <tr>
+            <td><strong>${esc(c.label)}</strong>${c.is_known ? "" : ` <span class="badge b-warn">Lạ</span>`}</td>
+            <td class="mono">${esc(c.ip || "—")}<br><span class="muted">${esc(c.mac)}</span></td>
+            <td>${esc(c.band)} • ${c.signal_dbm ?? "?"} dBm</td>
+            <td class="mono">↓${c.tx_mb ?? 0}M ↑${c.rx_mb ?? 0}M</td>
+            <td><div class="row" style="gap:4px;">${actCell}</div></td>
+          </tr>`;
+      }).join("");
+    }
+
+    window.routerAction = async (action, target = "") => {
+      if (action === "reboot" && !confirm("Khởi động lại Router OpenWrt? Mạng nhà sẽ ngắt khoảng 60–90 giây.")) {
+        return;
+      }
+      try {
+        const body = { action, target };
+        if (action === "kick_client") body.ban_sec = 60;
+        if (action === "reboot") body.confirm = true;
+        const res = await api("/api/router/action", { method: "POST", body: JSON.stringify(body) });
+        if (state.overview && res.router) {
+          state.overview.router = res.router;
+          renderRouter();
+          renderOverview();
+        }
+        showToast("Router OpenWrt", res.message || "Đã thực thi.");
+      } catch (e) {
+        showToast("Lỗi Router", e.message, "error");
+      }
+    };
+
+    if ($("btnRouterRefresh")) $("btnRouterRefresh").addEventListener("click", () => window.routerAction("refresh"));
+    if ($("btnRouterWakePc")) $("btnRouterWakePc").addEventListener("click", () => window.routerAction("wake_pc"));
+    if ($("btnRouterReboot")) $("btnRouterReboot").addEventListener("click", () => window.routerAction("reboot"));
+    if ($("routerConfigForm")) {
+      $("routerConfigForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        try {
+          const payload = {
+            router_url: $("rtUrlInput").value.trim(),
+            username: $("rtUserInput").value.trim(),
+            enabled: $("rtEnabledChk").checked,
+            notify_unknown_device: $("rtUnknownChk").checked,
+            boost_presence: $("rtPresenceChk").checked,
+          };
+          const pw = $("rtPassInput").value.trim();
+          if (pw) payload.password = pw;
+          const res = await api("/api/router/config", { method: "PATCH", body: JSON.stringify(payload) });
+          $("rtPassInput").value = "";
+          if (state.overview && res.router) {
+            state.overview.router = res.router;
+            syncRouterForm(res.settings);
+            renderRouter();
+            renderOverview();
+          }
+          showToast("Router OpenWrt", "Đã lưu cấu hình Router.");
+        } catch (err) {
+          showToast("Lỗi cấu hình Router", err.message, "error");
+        }
+      });
+    }
 
     // Boot
     api("/api/auth/check").then((res) => res.authenticated ? showApp() : showLogin()).catch(showLogin);

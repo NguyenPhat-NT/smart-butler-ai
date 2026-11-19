@@ -1413,6 +1413,7 @@ def _default_session_state(today_vn: Optional[str] = None) -> Dict[str, Any]:
         "dan_activity": "",
         "call_status": "none",
         "call_note": "",
+        "call_updated_at": 0.0,
         "today_plans": [],
         "updated_at": 0.0,
     }
@@ -1447,13 +1448,16 @@ def _normalize_session_state(raw: Any, today_vn: str, now_ts: float) -> Dict[str
     saved_date = str(raw.get("date") or "").strip()
     saved_updated = float(raw.get("updated_at") or 0.0)
     age_sec = max(0.0, float(now_ts) - saved_updated) if saved_updated > 0 else 999999.0
+    call_updated = float(raw.get("call_updated_at") or saved_updated or 0.0)
+    call_age_sec = max(0.0, float(now_ts) - call_updated) if call_updated > 0 else 999999.0
 
     if saved_date and saved_date != today_vn:
         # Sang ngày mới: xóa lịch trình tạm hôm qua; chỉ giữ 'in_call' nếu mới cập nhật < 90 phút trước
         call_st = str(raw.get("call_status") or "none").strip().lower()
-        if call_st == "in_call" and saved_updated > 0 and age_sec < _CALL_IDLE_TIMEOUT_SEC:
+        if call_st == "in_call" and call_updated > 0 and call_age_sec < _CALL_IDLE_TIMEOUT_SEC:
             base["call_status"] = "in_call"
             base["call_note"] = str(raw.get("call_note") or "").strip()[:180]
+            base["call_updated_at"] = call_updated
             base["updated_at"] = saved_updated
         return base
 
@@ -1467,14 +1471,15 @@ def _normalize_session_state(raw: Any, today_vn: str, now_ts: float) -> Dict[str
     c_st = str(raw.get("call_status") or "none").strip().lower()
     base["call_status"] = c_st if c_st in _VALID_CALL_STATUSES else "none"
     base["call_note"] = str(raw.get("call_note") or "").strip()[:180]
+    base["call_updated_at"] = call_updated
     base["updated_at"] = saved_updated
 
-    # Tự kết thúc cuộc gọi nếu cùng ngày nhưng im lặng quá 90 phút hoặc bước sang buổi sáng sau cuộc gọi ban đêm
+    # Tự kết thúc cuộc gọi nếu cùng ngày nhưng không cập nhật trạng thái gọi quá 90 phút hoặc bước sang buổi sáng
     if base["call_status"] == "in_call":
         now_dt = datetime.datetime.fromtimestamp(float(now_ts), tz=VN_TZ)
-        saved_dt = datetime.datetime.fromtimestamp(saved_updated, tz=VN_TZ) if saved_updated > 0 else now_dt
+        saved_dt = datetime.datetime.fromtimestamp(call_updated, tz=VN_TZ) if call_updated > 0 else now_dt
         overnight_to_morning = (saved_dt.hour < 5) and (now_dt.hour >= 6)
-        if age_sec >= _CALL_IDLE_TIMEOUT_SEC or (overnight_to_morning and age_sec >= 2700.0):
+        if call_age_sec >= _CALL_IDLE_TIMEOUT_SEC or (overnight_to_morning and call_age_sec >= 2700.0):
             base["call_status"] = "ended"
             base["call_note"] = "Cuộc gọi trước đã kết thúc (tự đóng sau khoảng nghỉ)"
 
@@ -1607,17 +1612,20 @@ def merge_session_state_update(
     raw_call_st = update.get("call_status")
     if isinstance(raw_call_st, str):
         c_st = raw_call_st.strip().lower()
-        if c_st in _VALID_CALL_STATUSES and c_st != state.get("call_status"):
-            state["call_status"] = c_st
-            changed = True
-            if c_st == "in_call" and not (update.get("call_note") and str(update.get("call_note")).strip().lower() not in ("null", "none")):
-                state["call_note"] = f"Trợ lýg trong cuộc gọi từ {_vn_hm_str(now)}"
+        if c_st in _VALID_CALL_STATUSES:
+            if c_st != state.get("call_status"):
+                state["call_status"] = c_st
+                changed = True
+                if c_st == "in_call" and not (update.get("call_note") and str(update.get("call_note")).strip().lower() not in ("null", "none")):
+                    state["call_note"] = f"Đang trong cuộc gọi từ {_vn_hm_str(now)}"
+            state["call_updated_at"] = now
 
     raw_call_note = update.get("call_note")
     if isinstance(raw_call_note, str):
         c_note = raw_call_note.strip()
         if c_note and c_note.lower() not in ("null", "none"):
             state["call_note"] = c_note[:180]
+            state["call_updated_at"] = now
             changed = True
 
     plan_updates = update.get("plan_updates")
@@ -1687,9 +1695,42 @@ def apply_session_state_update(
     return merged
 
 
+_CONTEXT_SPOKEN_STOPWORDS = {
+    "đang", "anh", "em", "với", "và", "của", "trong",
+    "tại", "lúc", "này", "hiện", "ngồi", "vừa", "cùng", "cho", "một", "cái",
+    "việc", "chuyện", "bên", "nhà", "nha", "nhé", "luôn", "rồi", "đi", "ở",
+    "làm", "uống", "ăn", "nghe", "xem", "nhắn", "tin", "cũng",
+}
+
+
+def _is_context_already_spoken(phrase: str, recent_bot_texts: Optional[List[str]]) -> bool:
+    """True nếu ý/hoạt động này đã được Trợ lý kể hoặc nhắc trong 5-6 tin gần nhất."""
+    if not phrase or not recent_bot_texts:
+        return False
+    raw_words = re.findall(r"[a-zA-Z0-9À-ỹ]+", str(phrase).lower())
+    keywords = [w for w in raw_words if len(w) >= 2 and w not in _CONTEXT_SPOKEN_STOPWORDS]
+    if not keywords:
+        return False
+    # Dùng cụm duy nhất giữ thứ tự
+    uniq_kw = list(dict.fromkeys(keywords))
+    for prev in recent_bot_texts[:6]:
+        prev_low = str(prev or "").lower()
+        if not prev_low:
+            continue
+        prev_words = set(re.findall(r"[a-zA-Z0-9À-ỹ]+", prev_low))
+        hits = sum(1 for kw in uniq_kw if kw in prev_words)
+        if len(uniq_kw) <= 3:
+            if hits >= max(1, (len(uniq_kw) + 1) // 2) and (hits >= 2 or len(uniq_kw) == 1):
+                return True
+        elif hits >= 2:
+            return True
+    return False
+
+
 def format_session_state_for_prompt(
     state: Optional[Dict[str, Any]],
     now_ts: Optional[float] = None,
+    recent_bot_texts: Optional[List[str]] = None,
 ) -> str:
     """Định dạng Live Session State thành khối ngữ cảnh ưu tiên cao cho Pass 1, Pass 2 và Proactive."""
     if not state or not isinstance(state, dict):
@@ -1718,9 +1759,21 @@ def format_session_state_for_prompt(
 
     lines: List[str] = []
     if state.get("user_activity"):
-        lines.append(f"- Chủ nhà hiện đang: {state['user_activity']}{age_note}")
+        ua = str(state["user_activity"])
+        spoken_note = (
+            " [ĐÃ NHẮC Ở LƯỢT TRƯỚC — KHÔNG GIỤC LẠI NỮA TRỪ KHI CHỦ NHÀ HỎI]"
+            if _is_context_already_spoken(ua, recent_bot_texts)
+            else ""
+        )
+        lines.append(f"- Chủ nhà hiện đang: {ua}{age_note}{spoken_note}")
     if state.get("dan_activity"):
-        lines.append(f"- Trợ lý hiện đang (ưu tiên hơn Nhật ký ngày): {state['dan_activity']}{age_note}")
+        da = str(state["dan_activity"])
+        spoken_note = (
+            " [ĐÃ KỂ Ở LƯỢT TRƯỚC — CHỈ GIỮ LÀM NỀN, TUYỆT ĐỐI KHÔNG KỂ LẠI RA MIỆNG TRỪ KHI CHỦ NHÀ HỎI]"
+            if _is_context_already_spoken(da, recent_bot_texts)
+            else ""
+        )
+        lines.append(f"- Trợ lý hiện đang (ưu tiên hơn Nhật ký ngày): {da}{age_note}{spoken_note}")
 
     call_status = state.get("call_status") or "none"
     call_note = state.get("call_note") or ""
@@ -2000,6 +2053,32 @@ _OPEN_LOOP_MAX_ITEMS = 8
 _OPEN_LOOP_TTL_SEC = 7 * 86400
 
 
+_OPEN_LOOP_IMPORTANT_ANCHOR_RE = re.compile(
+    r"\b(thi|kiểm\s+tra|phỏng\s+vấn|bệnh\s+viện|khám\s+bệnh|thuốc|deadline|đồ\s+án|nộp\s+bài|về\s+quê|chuyến\s+bay|sân\s+bay|họp)\b",
+    re.IGNORECASE,
+)
+_OPEN_LOOP_TRIVIAL_DEVICE_RE = re.compile(
+    r"\b(bật\s+quạt|tắt\s+quạt|quạt\s+thông\s+gió|bật\s+đèn|tắt\s+đèn|đèn\s+phòng|mở\s+nhạc\s+đánh\s+thức|chuông\s+báo\s+thức)\b",
+    re.IGNORECASE,
+)
+_OPEN_LOOP_TRIVIAL_NAG_RE = re.compile(
+    r"\b(đi\s+ăn\s+sáng|món\s+ấm\s+nóng|ăn\s+xong\s+(?:nhớ\s+)?báo\s+cáo|dậy\s+sớm|ngủ\s+nướng|gửi\s+(?:ảnh\s+)?selfie|tắt\s+(?:máy|điện\s+thoại)\s+đi\s+ngủ|chui\s+vô\s+chăn|uống\s+nước)\b",
+    re.IGNORECASE,
+)
+
+
+def is_trivial_open_loop_topic(topic: str, note: str = "") -> bool:
+    """True nếu topic/note chỉ là nhắc sinh hoạt vụn vặt hoặc hẹn giờ thiết bị đã có timer riêng."""
+    combined = f"{topic or ''} {note or ''}".strip()
+    if not combined:
+        return False
+    if _OPEN_LOOP_TRIVIAL_DEVICE_RE.search(combined):
+        return True
+    if _OPEN_LOOP_IMPORTANT_ANCHOR_RE.search(combined):
+        return False
+    return bool(_OPEN_LOOP_TRIVIAL_NAG_RE.search(combined))
+
+
 def get_open_loops(
     user_id: int,
     include_resolved: bool = False,
@@ -2009,19 +2088,41 @@ def get_open_loops(
     raw = _get_json_meta(f"open_loops:{user_id}", [])
     if not isinstance(raw, list):
         return []
-    loops = [
-        item for item in raw
-        if isinstance(item, dict)
-        and (now - float(item.get("updated_at") or item.get("created_at") or 0)) <= _OPEN_LOOP_TTL_SEC
-    ]
-    if not include_resolved:
-        loops = [l for l in loops if l.get("status", "open") == "open"]
+    changed = False
+    kept: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            changed = True
+            continue
+        if (now - float(item.get("updated_at") or item.get("created_at") or 0)) > _OPEN_LOOP_TTL_SEC:
+            changed = True
+            continue
+        if item.get("status", "open") == "open":
+            topic_s = str(item.get("topic") or "")
+            note_s = str(item.get("note") or "")
+            auto_resolve = is_trivial_open_loop_topic(topic_s, note_s)
+            if not auto_resolve:
+                t_ts, _ = _infer_loop_target_info(item)
+                if t_ts:
+                    last_surf = float(item.get("last_surfaced_at") or 0.0)
+                    if (now - t_ts) >= 1800.0 or (now >= t_ts and last_surf >= (t_ts - 120.0)):
+                        auto_resolve = True
+            if auto_resolve:
+                item["status"] = "resolved"
+                item["updated_at"] = now
+                changed = True
+        kept.append(item)
+
+    if changed:
+        _set_json_meta(f"open_loops:{user_id}", kept)
+
+    loops = kept if include_resolved else [l for l in kept if l.get("status", "open") == "open"]
     loops.sort(key=lambda x: float(x.get("updated_at") or x.get("created_at") or 0), reverse=True)
     return loops
 
 
 _LOOP_STOPWORDS = {
-    "cho", "anh", "em", "dan", "linh", "phat", "cua", "va", "voi", "ve",
+    "cho", "anh", "em", "cua", "va", "voi", "ve",
     "xem", "coi", "lam", "xong", "nhe", "nha", "nay", "kia", "do", "day",
     "roi", "dang", "se", "di", "o", "tai", "trong", "khi", "nao", "bao",
     "nhung", "cac", "mot", "an", "ngay", "hom", "mai",
@@ -2098,6 +2199,8 @@ def upsert_open_loop(
     clean_topic = str(topic or "").strip()[:100]
     clean_note = str(note or "").strip()[:240]
     if len(clean_topic) < 3:
+        return None
+    if is_trivial_open_loop_topic(clean_topic, clean_note):
         return None
     now = float(now_ts if now_ts is not None else time.time())
     all_loops = get_open_loops(user_id, include_resolved=True, now_ts=now)
@@ -2283,6 +2386,7 @@ def format_open_loops_for_prompt(
     user_id: int,
     limit: int = 2,
     cooldown_sec: float = 7200.0,
+    min_age_sec: float = 0.0,
     mark_surfaced: bool = False,
     now_ts: Optional[float] = None,
     respect_target_time: bool = False,
@@ -2292,6 +2396,7 @@ def format_open_loops_for_prompt(
         user_id,
         limit=limit,
         cooldown_sec=cooldown_sec,
+        min_age_sec=min_age_sec,
         now_ts=now,
         respect_target_time=respect_target_time,
     )

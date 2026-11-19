@@ -39,6 +39,8 @@ import smart_plugs
 import mcp_tools
 import habit_engine
 import persona
+import router_controller
+import diary_helper
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ def _get_runtime(app: web.Application) -> Dict[str, Any]:
         rt = {
             "sse_queues": set(),
             "esp32_ws_clients": set(),
+            "live_audio_ws_clients": set(),
             "esp32_stream_tasks": set(),
             "shutting_down": False,
         }
@@ -435,7 +438,7 @@ async def auth_middleware(request: web.Request, handler):
             return await handler(request)
         if path == "/api/lan/now_playing" and _matches_pin_header(request):
             return await handler(request)
-        if path in ("/api/esp32/stream", "/api/esp32/ws", "/api/esp32/event", "/api/esp32/telemetry", "/api/esp32/status"):
+        if path in ("/api/esp32/stream", "/api/esp32/ws", "/api/esp32/event", "/api/esp32/telemetry", "/api/esp32/status", "/api/jukebox/live_ws"):
             has_proxy_hdr = bool(request.headers.get("X-Forwarded-For") or request.headers.get("Forwarded"))
             if (not has_proxy_hdr and _is_private_lan_ip(_client_ip(request))) or _matches_pin_header(request):
                 return await handler(request)
@@ -533,6 +536,7 @@ def _build_overview_payload(client_ip: str, app: Optional[web.Application] = Non
         "fan": fan_controller.get_controller().get_status_snapshot(),
         "plugs": smart_plugs.get_controller().get_status_snapshot(),
         "habits": habit_engine.get_habits_snapshot(),
+        "router": router_controller.get_controller().get_status_snapshot(),
         "dht11": database.get_esp32_sensor_data(max_age_sec=3600.0),
         "quota": quota,
         "backup": backup,
@@ -550,6 +554,7 @@ def _build_overview_payload(client_ip: str, app: Optional[web.Application] = Non
             "watchdog": lan_watchdog.get_watchdog_settings(),
             "backup": backup_helper.get_backup_settings(),
             "fan": fan_controller.get_fan_settings(),
+            "router": router_controller.get_router_settings(mask_secret=True),
         },
     }
 
@@ -919,6 +924,7 @@ async def handle_settings_patch(request: web.Request) -> web.Response:
             "watchdog": lan_watchdog.get_watchdog_settings(),
             "backup": backup_helper.get_backup_settings(),
             "fan": fan_controller.get_fan_settings(),
+            "router": router_controller.get_router_settings(mask_secret=True),
         },
     })
 
@@ -1404,10 +1410,116 @@ async def handle_jukebox_control(request: web.Request) -> web.Response:
         if not ok:
             return _json_err("Không tìm thấy bài cần xóa trong cache.", 404)
         snap = mgr.get_status_snapshot()
+    elif action == "start_pc_live":
+        await _close_live_audio_ws_clients(request.app, exclude=None, reason="preempted")
+        try:
+            snap = await mgr.start_pc_bridge_live_stream(preferred_ip=_client_ip(request))
+        except Exception as e:
+            return _json_err(str(e), 502)
+    elif action == "stop_live":
+        await _close_live_audio_ws_clients(request.app, exclude=None, reason="dashboard_stop")
+        snap = await mgr.stop_live_stream(reason="dashboard_stop")
     else:
         return _json_err("Hành động Jukebox không hợp lệ.", 400)
 
     return _json_ok(snap)
+
+
+async def _close_live_audio_ws_clients(
+    app: web.Application,
+    *,
+    exclude: Optional[web.WebSocketResponse] = None,
+    reason: str = "preempted",
+) -> None:
+    rt = _get_runtime(app)
+    ws_set = rt.setdefault("live_audio_ws_clients", set())
+    for client_ws in list(ws_set):
+        if client_ws is exclude:
+            continue
+        ws_set.discard(client_ws)
+        if not client_ws.closed:
+            try:
+                await client_ws.send_json({"type": "live_stopped", "reason": reason})
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(client_ws.close(), timeout=0.5)
+            except Exception:
+                pass
+
+
+async def handle_jukebox_live_ws(request: web.Request) -> web.StreamResponse:
+    """WebSocket nhận PCM 24kHz s16le mono trực tiếp từ Trình duyệt / PC / Điện thoại phát ra loa ESP32-C3."""
+    ws = web.WebSocketResponse(max_msg_size=128 * 1024, heartbeat=15.0)
+    await ws.prepare(request)
+
+    client_ip = _client_ip(request)
+    source = str(request.query.get("source") or "web_cast").strip() or "web_cast"
+    label = str(request.query.get("label") or "").strip()[:100]
+    if not label:
+        label = f"📡 Web Cast ({client_ip or 'LAN'})"
+
+    mgr = esp32_audio.get_manager()
+    rt = _get_runtime(request.app)
+    await _close_live_audio_ws_clients(request.app, exclude=ws, reason="preempted")
+    ws_set = rt.setdefault("live_audio_ws_clients", set())
+    ws_set.add(ws)
+
+    live_gen = await mgr.start_live_stream(source=source, label=label, client_ip=client_ip)
+    stop_reason = "ws_disconnected"
+    try:
+        await ws.send_json({
+            "type": "live_ready",
+            "sample_rate": esp32_audio.SAMPLE_RATE,
+            "channels": esp32_audio.CHANNELS,
+            "format": "s16le",
+            "live_gen": live_gen,
+        })
+        async for msg in ws:
+            if rt.get("shutting_down"):
+                stop_reason = "shutdown"
+                break
+            if msg.type == WSMsgType.BINARY:
+                if not mgr.push_live_pcm(msg.data, live_gen=live_gen):
+                    stop_reason = "preempted_or_timeout"
+                    try:
+                        await ws.send_json({"type": "live_stopped", "reason": stop_reason})
+                    except Exception:
+                        pass
+                    break
+            elif msg.type == WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                mtype = str(data.get("type") or "").strip().lower()
+                if mtype == "stop":
+                    stop_reason = "client_stop"
+                    break
+                elif mtype == "ping":
+                    await ws.send_json({"type": "pong", "live": mgr.live_stream_active})
+                elif mtype == "meta" and data.get("label") and mgr.live_stream_active and mgr._live_gen == live_gen:
+                    new_lbl = str(data["label"]).strip()[:100]
+                    if new_lbl:
+                        mgr.live_stream_label = new_lbl
+                        if mgr.current_track and mgr.current_track.get("video_id") == "__live_ws__":
+                            mgr.current_track["title"] = new_lbl
+                        mgr.publish_update()
+            elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
+                break
+    except (asyncio.CancelledError, ConnectionResetError, OSError):
+        pass
+    finally:
+        ws_set.discard(ws)
+        await mgr.stop_live_stream(live_gen=live_gen, reason=stop_reason)
+        if not ws.closed:
+            try:
+                await asyncio.wait_for(ws.close(), timeout=0.5)
+            except Exception:
+                pass
+    return ws
 
 
 async def handle_jukebox_eq(request: web.Request) -> web.Response:
@@ -1610,6 +1722,10 @@ async def _on_dashboard_shutdown(app: web.Application) -> None:
             except Exception:
                 pass
 
+    await _close_live_audio_ws_clients(app, exclude=None, reason="shutdown")
+    if mgr is not None and mgr.live_stream_active:
+        await mgr.stop_live_stream(reason="shutdown")
+
     for task in list(rt.get("esp32_stream_tasks") or ()):
         if not task.done():
             task.cancel()
@@ -1622,6 +1738,7 @@ def create_app(bot=None, target_user_id: int = 0) -> web.Application:
     app[APP_RUNTIME_KEY] = {
         "sse_queues": set(),
         "esp32_ws_clients": set(),
+        "live_audio_ws_clients": set(),
         "esp32_stream_tasks": set(),
         "shutting_down": False,
     }
@@ -1684,6 +1801,7 @@ def create_app(bot=None, target_user_id: int = 0) -> web.Application:
     app.router.add_get("/api/esp32/status", handle_esp32_status)
 
     app.router.add_get("/api/jukebox/status", handle_esp32_status)
+    app.router.add_get("/api/jukebox/live_ws", handle_jukebox_live_ws)
     app.router.add_post("/api/jukebox/play", handle_jukebox_play)
     app.router.add_post("/api/jukebox/control", handle_jukebox_control)
     app.router.add_post("/api/jukebox/eq", handle_jukebox_eq)
@@ -1710,10 +1828,36 @@ def create_app(bot=None, target_user_id: int = 0) -> web.Application:
     app.router.add_post("/api/habits/settings", handle_habits_settings)
     app.router.add_post("/api/habits/control", handle_habits_control)
 
+    app.router.add_get("/api/router/status", handle_router_status)
+    app.router.add_post("/api/router/action", handle_router_action)
+    app.router.add_patch("/api/router/config", handle_router_config)
+    app.router.add_post("/api/router/config", handle_router_config)
+
     app.router.add_post("/mcp", handle_mcp_post)
     app.router.add_get("/mcp", handle_mcp_get)
     app.router.add_delete("/mcp", handle_mcp_delete)
     return app
+
+
+def _parse_bool_flag(val: Any, default: Optional[bool] = None) -> Optional[bool]:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return int(val) != 0
+    sval = str(val or "").strip().lower()
+    if sval in ("1", "true", "on"):
+        return True
+    if sval in ("0", "false", "off"):
+        return False
+    return default
+
+
+def _parse_positive_mins(val: Any, *, max_mins: int = 1440) -> int:
+    try:
+        m = int(round(float(val)))
+        return min(max_mins, m) if m > 0 else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 async def handle_fan_status(request: web.Request) -> web.Response:
@@ -1739,23 +1883,45 @@ async def handle_fan_control(request: web.Request) -> web.Response:
         ctrl.publish_update()
         return _json_ok({"fan": ctrl.get_status_snapshot()})
 
+    if action == "cancel_timer":
+        ctrl.cancel_timer()
+        return _json_ok({"fan": ctrl.get_status_snapshot()})
+
+    if action == "timer":
+        want_on = bool(_parse_bool_flag(value, default=False))
+        delay_raw = body.get("delay_minutes") if body.get("delay_minutes") is not None else body.get("minutes")
+        at_time_vn = str(body.get("at_time_vn") or "").strip()
+        dur_mins = _parse_positive_mins(body.get("duration_minutes"), max_mins=720)
+        due_at = diary_helper.resolve_device_schedule_ts(at_time_vn=at_time_vn, delay_minutes=delay_raw)
+        if due_at is None:
+            return _json_err("Thông số hẹn giờ quạt không hợp lệ (cần số phút > 0 hoặc giờ HH:MM).", 400)
+        speed_pct = None
+        if body.get("speed_pct") is not None and str(body.get("speed_pct")).strip() != "":
+            try:
+                max_pct = int(fan_controller.get_fan_settings().get("max_speed_pct", 40))
+                speed_pct = max(0, min(max_pct, int(round(float(body.get("speed_pct"))))))
+            except (TypeError, ValueError):
+                speed_pct = None
+        step_action = "on" if want_on else "off"
+        steps = ctrl.schedule_sequence(
+            step_action,
+            due_at,
+            speed_pct=speed_pct,
+            duration_minutes=(dur_mins if (want_on and dur_mins > 0) else None),
+        )
+        return _json_ok({"timer": steps[0] if steps else None, "timers": steps, "fan": ctrl.get_status_snapshot()})
+
     if action == "power":
-        if isinstance(value, bool):
-            target_on = value
-        elif isinstance(value, (int, float)):
-            target_on = int(value) != 0
-        else:
-            sval = str(value or "").strip().lower()
-            if sval in ("1", "true", "on"):
-                target_on = True
-            elif sval in ("0", "false", "off"):
-                target_on = False
-            else:
-                cur = await ctrl.get_state(refresh=True)
-                target_on = not bool((cur or {}).get("is_on"))
+        target_on = _parse_bool_flag(value)
+        if target_on is None:
+            cur = await ctrl.get_state(refresh=True)
+            target_on = not bool((cur or {}).get("is_on"))
         res = await ctrl.set_power(target_on, manual=True, reason="Dashboard")
         if res is None:
             return _json_err("Quạt ESP-01S không phản hồi trên mạng LAN.", 502)
+        dur_mins = _parse_positive_mins(body.get("duration_minutes") or body.get("minutes"), max_mins=720)
+        if target_on and dur_mins > 0:
+            ctrl.schedule_timer("off", time.time() + dur_mins * 60.0, replace=True)
         return _json_ok({"fan": ctrl.get_status_snapshot()})
 
     if action == "speed":
@@ -1842,14 +2008,19 @@ async def handle_plugs_control(request: web.Request) -> web.Response:
         return _json_ok({"plugs": ctrl.get_status_snapshot()})
 
     if action == "timer":
-        try:
-            mins = int(body.get("delay_minutes") or body.get("minutes") or 0)
-        except (TypeError, ValueError):
-            mins = 0
-        if mins <= 0:
-            return _json_err("Số phút hẹn giờ phải > 0.", 400)
-        want_on = bool(body.get("value", False))
-        tm = ctrl.schedule_timer(mac, want_on, mins)
+        want_on = bool(_parse_bool_flag(body.get("value"), default=False))
+        delay_raw = body.get("delay_minutes") if body.get("delay_minutes") is not None else body.get("minutes")
+        at_time_vn = str(body.get("at_time_vn") or "").strip()
+        dur_mins = _parse_positive_mins(body.get("duration_minutes"), max_mins=720)
+        due_at = diary_helper.resolve_device_schedule_ts(at_time_vn=at_time_vn, delay_minutes=delay_raw)
+        if due_at is None:
+            return _json_err("Thông số hẹn giờ không hợp lệ (cần số phút > 0 hoặc giờ HH:MM).", 400)
+        tm = ctrl.schedule_sequence(
+            mac,
+            want_on,
+            due_at,
+            duration_minutes=(dur_mins if (want_on and dur_mins > 0) else None),
+        )
         if tm is None:
             return _json_err("Không tìm thấy ổ cắm cần hẹn giờ.", 404)
         return _json_ok({"timer": tm, "plugs": ctrl.get_status_snapshot()})
@@ -1862,14 +2033,13 @@ async def handle_plugs_control(request: web.Request) -> web.Response:
             cur = await ctrl.refresh_plug(plugs_found[0])
             target_on = not bool(cur) if cur is not None else True
         else:
-            val = body.get("value")
-            if isinstance(val, bool):
-                target_on = val
-            else:
-                target_on = str(val or "").strip().lower() in ("1", "true", "on")
+            target_on = bool(_parse_bool_flag(body.get("value"), default=False))
         res = await ctrl.set_power(mac, target_on, reason="Dashboard")
         if res is None:
             return _json_err("Ổ cắm BroadLink không phản hồi hoặc đang bật Lock Device.", 502)
+        dur_mins = _parse_positive_mins(body.get("duration_minutes") or body.get("minutes"), max_mins=720)
+        if target_on and dur_mins > 0:
+            ctrl.schedule_timer(mac, False, dur_mins)
         return _json_ok({"plugs": ctrl.get_status_snapshot()})
 
     return _json_err("Hành động điều khiển ổ cắm không hợp lệ.", 400)
@@ -1938,6 +2108,49 @@ async def handle_habits_control(request: web.Request) -> web.Response:
     if not note:
         return _json_err("Không tìm thấy thói quen cần thao tác.", 404)
     return _json_ok({"note": note, "habits": habit_engine.get_habits_snapshot()})
+
+
+async def handle_router_status(request: web.Request) -> web.Response:
+    ctrl = router_controller.get_controller()
+    if request.query.get("refresh", "1") != "0":
+        await ctrl.refresh_state(force=True)
+    return _json_ok({"router": ctrl.get_status_snapshot()})
+
+
+async def handle_router_config(request: web.Request) -> web.Response:
+    body = await _parse_json(request)
+    saved = router_controller.save_router_settings(body)
+    ctrl = router_controller.get_controller()
+    if saved.get("enabled"):
+        await ctrl.refresh_state(force=True)
+    return _json_ok({"settings": saved, "router": ctrl.get_status_snapshot()})
+
+
+async def handle_router_action(request: web.Request) -> web.Response:
+    body = await _parse_json(request)
+    action = str(body.get("action") or "").strip().lower()
+    ctrl = router_controller.get_controller()
+    target = str(body.get("target") or "").strip()
+    if action == "refresh":
+        snap = await ctrl.refresh_state(force=True)
+        return _json_ok({"ok": bool(snap.get("online")), "message": "Đã làm mới trạng thái Router.", "router": snap})
+    if action == "wake_pc":
+        res = await ctrl.wake_pc(target)
+        return _json_ok({**res, "router": ctrl.get_status_snapshot()}) if res.get("ok") else _json_err(res.get("message", "Lỗi WoL"), 400)
+    if action == "kick_client":
+        ban_sec = int(body.get("ban_sec") or 60)
+        res = await ctrl.kick_client(target, ban_sec=ban_sec, reason_note="(Dashboard)")
+        return _json_ok({**res, "router": ctrl.get_status_snapshot()}) if res.get("ok") else _json_err(res.get("message", "Từ chối"), 400)
+    if action == "trust_mac":
+        res = ctrl.trust_mac(target, alias=str(body.get("alias") or "").strip())
+        return _json_ok({**res, "router": ctrl.get_status_snapshot()}) if res.get("ok") else _json_err(res.get("message", "MAC không hợp lệ"), 400)
+    if action == "untrust_mac":
+        res = ctrl.untrust_mac(target)
+        return _json_ok({**res, "router": ctrl.get_status_snapshot()}) if res.get("ok") else _json_err(res.get("message", "Không tìm thấy"), 404)
+    if action == "reboot":
+        res = await ctrl.reboot_router_dashboard_only(confirmed=bool(body.get("confirm")))
+        return _json_ok({**res, "router": ctrl.get_status_snapshot()}) if res.get("ok") else _json_err(res.get("message", "Lỗi reboot"), 400)
+    return _json_err("Hành động router không hợp lệ (refresh|wake_pc|kick_client|trust_mac|untrust_mac|reboot).", 400)
 
 
 async def handle_mcp_get(request: web.Request) -> web.Response:

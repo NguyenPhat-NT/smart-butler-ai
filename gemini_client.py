@@ -45,9 +45,11 @@ _INTERNAL_JSON_KEYS = {
     "call_status", "call_note", "plan_updates", "topic",
     "status", "time_hint", "note", "durable_user_fact",
     "music_action", "duration_minutes", "alarm_time_vn", "eq_preset",
-    "fan_action", "speed_pct", "step",
+    "fan_action", "speed_pct", "freq_hz", "step",
     "plug_action", "target", "targets",
+    "at_time_vn", "start_time_vn", "after_minutes", "for_minutes",
     "habit_action", "habit_key", "device_action", "trigger_time", "temp_min", "duration_mins", "pattern",
+    "router_action", "ban_sec", "alias",
     "fetch_tools", "query",
 }
 _JSON_KEY_PREFIX_RE = re.compile(r'^\s*"?([a-zA-Z0-9_]{2,40})"?\s*:')
@@ -503,6 +505,7 @@ def parse_ai_json(raw_text: str, default_mood: str = "vui vẻ") -> Dict[str, An
         "fan_action": None,
         "plug_action": None,
         "habit_action": None,
+        "router_action": None,
         "fetch_tools": [],
         "decision": None,
         "recheck_after_mins": None,
@@ -601,7 +604,17 @@ def parse_ai_json(raw_text: str, default_mood: str = "vui vẻ") -> Dict[str, An
     if m_recheck:
         result["recheck_after_mins"] = int(m_recheck.group(1))
 
-    for act_key in ("music_action", "fan_action", "plug_action", "habit_action"):
+    for act_key in ("music_action", "fan_action", "plug_action", "habit_action", "router_action"):
+        if act_key == "plug_action":
+            m_arr = re.search(rf'"plug_action"\s*:\s*(\[\s*\{{.*?\}}\s*\])', clean_text, re.DOTALL)
+            if m_arr:
+                try:
+                    arr_obj = json.loads(m_arr.group(1))
+                    if isinstance(arr_obj, list):
+                        result["plug_action"] = [x for x in arr_obj if isinstance(x, dict)]
+                        continue
+                except Exception:
+                    pass
         m_act = re.search(rf'"{act_key}"\s*:\s*(\{{[^{{}}]*\}})', clean_text, re.DOTALL)
         if m_act:
             try:
@@ -1115,7 +1128,7 @@ def _sync_turn_deferred_promises(
     )
 
 
-def _extract_recent_bot_texts(recent: List[Dict[str, Any]], limit: int = 4) -> List[str]:
+def _extract_recent_bot_texts(recent: List[Dict[str, Any]], limit: int = 6) -> List[str]:
     """Lấy danh sách các tin nhắn gần nhất của Đan (cả chữ lẫn voice) để chống lặp câu chữ / mở đầu / ý cũ."""
     texts: List[str] = []
     for msg in reversed(recent or []):
@@ -1167,14 +1180,189 @@ def _is_pair_similar(a: str, b: str, ratio_thresh: float = 0.72, jaccard_thresh:
     return False
 
 
+_REPEATED_MOTIF_CLUSTERS: Tuple[Tuple[str, str, Tuple[str, ...], Tuple[str, ...]], ...] = (
+    (
+        "sleep_nag",
+        "giục đi ngủ / cất điện thoại / dậy theo báo thức",
+        (
+            "đi ngủ", "chui vô chăn", "tắt điện thoại", "cất điện thoại",
+            "nhắm mắt", "ngủ nướng", "chuông báo thức", "tắt máy đi ngủ",
+            "cấm cù nhây", "cất lap", "dậy đúng giờ", "dậy sớm", "ngủ sớm",
+        ),
+        ("mấy giờ dậy", "mấy giờ ngủ", "ngủ chưa", "đi ngủ chưa", "em ngủ chưa"),
+    ),
+    (
+        "meal_code_nag",
+        "giục đi ăn sáng ấm nóng / cấm cày code",
+        (
+            "đi ăn sáng", "món gì ấm nóng", "món gì cho nóng",
+            "trốn đi cày code", "quên ăn uống", "cày code",
+            "ăn xong nhớ báo cáo", "nạp đầy năng lượng",
+        ),
+        ("ăn gì", "món gì", "ăn sáng chưa", "tới giờ ăn", "đói bụng"),
+    ),
+    (
+        "weather_tea_chill",
+        "kể chuyện thời tiết lạnh / uống trà nóng",
+        (
+            "trà nóng", "trà gừng", "trời se lạnh", "cuộn chăn",
+        ),
+        ("thời tiết", "trời lạnh", "trà nóng", "trà gừng"),
+    ),
+    (
+        "room_temp_nag",
+        "nhắc nhiệt độ phòng 31 độ",
+        (
+            "ba mươi mốt độ", "ba mốt độ", "31 độ", "31.8",
+            "nóng nực rồi", "nhiệt độ phòng đang", "độ trong phòng",
+        ),
+        ("bao nhiêu độ", "mấy độ", "nhiệt độ", "phòng nóng", "nóng quá"),
+    ),
+)
+
+
+def _build_recent_repetition_guard_notes(
+    recent_bot_texts: List[str],
+    user_text: str = "",
+) -> List[str]:
+    """Tạo nhắc nhở tự động cho Pass 1 & Pass 2 về các mô-típ/khẩu ngữ Đan vừa nói ở các lượt gần đây."""
+    if not recent_bot_texts:
+        return []
+    recent_window = " ".join(str(t or "").lower() for t in recent_bot_texts[:5])
+    recent_tail2 = " ".join(str(t or "").lower() for t in recent_bot_texts[:2])
+    user_low = str(user_text or "").lower()
+
+    notes: List[str] = []
+    p_cfg = persona.get_persona_config()
+    b_name = p_cfg["butler_name"]
+    for _cid, label, kw_list, ask_kws in _REPEATED_MOTIF_CLUSTERS:
+        if any(ak in user_low for ak in ask_kws):
+            continue
+        if any(kw in recent_window for kw in kw_list):
+            notes.append(
+                f"- {b_name} vừa nói về [{label}] ở tin trước rồi -> lượt này TUYỆT ĐỐI KHÔNG nhắc lại hay kẹp thêm ở cuối câu nữa!"
+            )
+
+    if re.search(r"\bu\s+là\s+trời\b", recent_tail2, re.IGNORECASE):
+        notes.append(
+            f"- {b_name} vừa mở đầu bằng 'U là trời' gần đây -> lượt này ĐỔI cách mở câu tự nhiên hơn."
+        )
+    return notes
+
+
+def _is_sentence_semantically_repetitive(
+    seg: str,
+    recent_bot_texts: List[str],
+    user_text: str = "",
+) -> bool:
+    """True nếu một câu lặp lại câu cũ hoặc mô-típ Đan vừa nói trong 3-5 tin gần nhất (trừ khi user hỏi)."""
+    if not seg or not recent_bot_texts:
+        return False
+    norm_seg = _normalize_text_for_dup(seg)
+    if len(norm_seg) < 16:
+        return False
+
+    recent_5 = [str(t or "") for t in recent_bot_texts[:5] if str(t or "").strip()]
+    if not recent_5:
+        return False
+
+    for prev in recent_5:
+        prev_segs = [s.strip() for s in re.split(r"[.!?\n|…]+", prev) if len(s.strip()) >= 22]
+        for prev_s in [prev] + prev_segs:
+            if _is_pair_similar(seg, prev_s, ratio_thresh=0.62, jaccard_thresh=0.52):
+                return True
+
+    seg_low = str(seg).lower()
+    user_low = str(user_text or "").lower()
+    recent_5_low = " ".join(recent_5).lower()
+    recent_3_low = " ".join(recent_5[:3]).lower()
+
+    for _cid, _label, kw_list, ask_kws in _REPEATED_MOTIF_CLUSTERS:
+        if any(ak in user_low for ak in ask_kws):
+            continue
+        cand_hits = [kw for kw in kw_list if kw in seg_low]
+        if not cand_hits:
+            continue
+        if len(cand_hits) >= 2 and any(kw in recent_5_low for kw in kw_list):
+            return True
+        if any(kw in recent_3_low for kw in cand_hits):
+            return True
+    return False
+
+
+def _split_sentences_preserve(text: str) -> List[str]:
+    parts = [p.strip() for p in re.split(r"(?<=[.!?…])\s+", str(text or "").strip()) if p.strip()]
+    return parts if parts else ([str(text).strip()] if str(text or "").strip() else [])
+
+
+def _trim_repetitive_trailing_sentences(
+    messages: List[str],
+    recent_bot_texts: List[str],
+    user_text: str = "",
+    voice_text: Optional[str] = None,
+) -> Tuple[List[str], Optional[str], bool]:
+    """
+    Cắt gọn 0ms các câu đuôi / bong bóng đuôi bị lặp ý giục cũ hoặc bối cảnh đã kể
+    nếu phần câu đầu tiên đã trả lời trọn vẹn (>= 16 ký tự cho text, >= 35 ký tự cho voice).
+    """
+    clean_msgs = [str(m).strip() for m in (messages or []) if isinstance(m, str) and str(m).strip()]
+    clean_voice = str(voice_text).strip() if isinstance(voice_text, str) and voice_text.strip() else None
+    if not recent_bot_texts:
+        return clean_msgs, clean_voice, False
+
+    did_trim = False
+    if clean_msgs:
+        bubble_sents = [_split_sentences_preserve(b) for b in clean_msgs]
+        while bubble_sents:
+            last_sents = bubble_sents[-1]
+            if not last_sents:
+                bubble_sents.pop()
+                continue
+            total_sents = sum(len(s) for s in bubble_sents)
+            if total_sents <= 1:
+                break
+            candidate_tail = last_sents[-1]
+            # Tính phần text sẽ còn lại nếu bỏ candidate_tail
+            remaining_text = " ".join(
+                " ".join(s[:-1] if idx == len(bubble_sents) - 1 else s)
+                for idx, s in enumerate(bubble_sents)
+            ).strip()
+            if len(_normalize_text_for_dup(remaining_text)) < 16:
+                break
+            if _is_sentence_semantically_repetitive(candidate_tail, recent_bot_texts, user_text=user_text):
+                last_sents.pop()
+                if not last_sents:
+                    bubble_sents.pop()
+                did_trim = True
+            else:
+                break
+        clean_msgs = [" ".join(sents).strip() for sents in bubble_sents if sents]
+
+    if clean_voice:
+        v_sents = _split_sentences_preserve(clean_voice)
+        while len(v_sents) > 1:
+            rem_voice = " ".join(v_sents[:-1]).strip()
+            if len(_normalize_text_for_dup(rem_voice)) < 35:
+                break
+            if _is_sentence_semantically_repetitive(v_sents[-1], recent_bot_texts, user_text=user_text):
+                v_sents.pop()
+                did_trim = True
+            else:
+                break
+        clean_voice = " ".join(v_sents).strip() if v_sents else clean_voice
+
+    return clean_msgs, clean_voice, did_trim
+
+
 def _find_repetitive_previous_msg(
     candidate_messages: List[str],
     recent_bot_texts: List[str],
     candidate_voice: Optional[str] = None,
+    user_text: str = "",
 ) -> Optional[str]:
     """
-    Trả về nội dung tin nhắn cũ bị lặp nếu câu trả lời mới (chữ hoặc voice) giống >~72% tin Đan vừa gửi
-    hoặc dùng lại đúng cụm 5 từ mở đầu rập khuôn gần đây.
+    Trả về nội dung tin nhắn cũ bị lặp nếu câu trả lời mới (chữ hoặc voice) giống >~72% tin Đan vừa gửi,
+    dùng lại đúng cụm 5 từ mở đầu rập khuôn gần đây, hoặc chỉ có 1 câu bị trùng mô-típ đã nói.
     """
     if not recent_bot_texts:
         return None
@@ -1205,6 +1393,11 @@ def _find_repetitive_previous_msg(
         if first_cand_seg and prev_segments:
             if _is_pair_similar(first_cand_seg, prev_segments[0], ratio_thresh=0.78, jaccard_thresh=0.72):
                 return prev
+
+    # Bắt nốt ca tin nhắn chỉ gồm 1 câu duy nhất mà chính câu đó trùng mô-típ đã nói
+    all_sents = [s for c in clean_cands for s in _split_sentences_preserve(c)]
+    if all_sents and all(_is_sentence_semantically_repetitive(s, recent_bot_texts, user_text=user_text) for s in all_sents):
+        return recent_bot_texts[0]
     return None
 
 
@@ -1245,7 +1438,7 @@ def _resolve_photo_selection(
     return None, None
 
 
-async def chat_with_linh_dan(user_id: int, user_message: str, 
+async def chat_with_butler(user_id: int, user_message: str, 
                             photo_bytes: Optional[bytes] = None, 
                             media_items: Optional[List[Tuple[bytes, str]]] = None,
                             video_file_uri: Optional[str] = None,
@@ -1331,13 +1524,16 @@ async def chat_with_linh_dan(user_id: int, user_message: str,
     if exclude_reminder_id is not None:
         pending_reminders = [r for r in pending_reminders if int(r["id"]) != int(exclude_reminder_id)]
 
+    recent_bot_texts = _extract_recent_bot_texts(recent, limit=6)
     if current_message_saved:
         session_state = database.clear_stale_user_sleep_state_on_message(
             user_id, text_content, now_ts=now_ts
         )
     else:
         session_state = database.get_session_state(user_id)
-    session_state_text = database.format_session_state_for_prompt(session_state, now_ts=now_ts)
+    session_state_text = database.format_session_state_for_prompt(
+        session_state, now_ts=now_ts, recent_bot_texts=recent_bot_texts
+    )
 
     # Pass 1 System Instruction (Chiến lược & suy nghĩ ngữ cảnh thời gian thực)
     import circadian
@@ -1356,6 +1552,12 @@ async def chat_with_linh_dan(user_id: int, user_message: str,
             voice_cooldown_active = True
 
     pass1_memories = list(memories)
+    pronoun_hint = resolve_pronoun_referent_hint(text_content)
+    if pronoun_hint:
+        pass1_memories.append(pronoun_hint)
+    rep_notes = _build_recent_repetition_guard_notes(recent_bot_texts, text_content)
+    if rep_notes:
+        pass1_memories.append("CHỐNG LẶP Ý & BỐI CẢNH GẦN ĐÂY:\n" + "\n".join(rep_notes))
     if extra_system_note:
         pass1_memories.append(extra_system_note)
     if voice_cooldown_active:
@@ -1364,7 +1566,13 @@ async def chat_with_linh_dan(user_id: int, user_message: str,
         )
     circadian_text = circadian.format_circadian_for_prompt()
     open_loops_text = database.format_open_loops_for_prompt(
-        user_id, limit=2, cooldown_sec=7200.0, mark_surfaced=allow_reminder_mutations, now_ts=now_ts
+        user_id,
+        limit=2,
+        cooldown_sec=7200.0,
+        min_age_sec=2700.0,
+        mark_surfaced=allow_reminder_mutations,
+        now_ts=now_ts,
+        respect_target_time=True,
     )
     # Tránh nhồi thông tin thiết bị phòng cố định theo từ khóa vào Pass 1 (Pass 1 tự chọn `fetch_tools` MCP khi cần)
     now_playing_text = database.format_now_playing_for_prompt()
@@ -1448,7 +1656,9 @@ async def chat_with_linh_dan(user_id: int, user_message: str,
         )
         if defer_commit:
             session_state, _ = database.merge_session_state_update(session_state, sanitized_ss_update, now_ts=now_ts)
-            session_state_text = database.format_session_state_for_prompt(session_state, now_ts=now_ts)
+            session_state_text = database.format_session_state_for_prompt(
+                session_state, now_ts=now_ts, recent_bot_texts=recent_bot_texts
+            )
             deferred_payload = {
                 "user_id": user_id,
                 "now_ts": now_ts,
@@ -1461,7 +1671,9 @@ async def chat_with_linh_dan(user_id: int, user_message: str,
             }
         else:
             session_state = database.apply_session_state_update(user_id, sanitized_ss_update)
-            session_state_text = database.format_session_state_for_prompt(session_state, now_ts=now_ts)
+            session_state_text = database.format_session_state_for_prompt(
+                session_state, now_ts=now_ts, recent_bot_texts=recent_bot_texts
+            )
             allow_promise = _has_explicit_promise_signal(text_content, session_state)
             _apply_reminder_actions(
                 user_id,
@@ -1472,6 +1684,84 @@ async def chat_with_linh_dan(user_id: int, user_message: str,
                 out_added=p1_added_reminders,
             )
             database.reconcile_reminders_with_session_state(user_id, session_state)
+
+    # Bước 1.5 (AI-First Device Control): Thực thi song song hành động thiết bị/thói quen mà Pass 1 vừa quyết định
+    # CHỈ chạy ở lượt trả lời chat trực tiếp của user (`reply`), trước `fetch_tools`, Pass 2 và Pass 3.
+    action_exec_notes: List[str] = []
+    if turn_kind in (None, "", "reply"):
+        import esp32_audio
+        import fan_controller
+        import smart_plugs
+        import habit_engine
+        import router_controller
+
+        fan_ctrl = fan_controller.get_controller()
+        async_tasks: List[Tuple[str, Any]] = []
+
+        if isinstance(p1_data.get("fan_action"), dict):
+            async_tasks.append((
+                "fan",
+                fan_ctrl.execute_ai_fan_action(p1_data["fan_action"], event_source="user_telegram"),
+            ))
+            p1_data["_pre_executed_fan"] = True
+
+        plug_act = p1_data.get("plug_action")
+        if isinstance(plug_act, dict) or (isinstance(plug_act, list) and any(isinstance(x, dict) for x in plug_act)):
+            async_tasks.append((
+                "plug",
+                smart_plugs.get_controller().execute_ai_plug_action(plug_act, event_source="user_telegram"),
+            ))
+            p1_data["_pre_executed_plug"] = True
+
+        if isinstance(p1_data.get("music_action"), dict):
+            async_tasks.append((
+                "music",
+                esp32_audio.execute_ai_music_action(p1_data["music_action"], event_source="user_telegram"),
+            ))
+            p1_data["_pre_executed_music"] = True
+
+        if isinstance(p1_data.get("router_action"), dict):
+            async_tasks.append((
+                "router",
+                router_controller.get_controller().execute_ai_router_action(p1_data["router_action"]),
+            ))
+            p1_data["_pre_executed_router"] = True
+
+        if async_tasks:
+            task_results = await asyncio.gather(*(coro for _, coro in async_tasks), return_exceptions=True)
+            for (kind_tag, _), res_val in zip(async_tasks, task_results):
+                if isinstance(res_val, Exception):
+                    logger.warning(f"⚠️ [AI-First {kind_tag}]: {res_val}")
+                elif isinstance(res_val, str) and res_val.strip():
+                    action_exec_notes.append(res_val.strip())
+                    logger.info(f"⚡ [AI-First {kind_tag}]: {res_val.strip()}")
+
+        try:
+            sleep_reconcile_note = await fan_ctrl.reconcile_sleep_prompt_after_ai(
+                text_content, fan_action=p1_data.get("fan_action")
+            )
+            if sleep_reconcile_note:
+                action_exec_notes.append(sleep_reconcile_note)
+        except Exception as sleep_rec_err:
+            logger.debug(f"Sleep reconcile skipped: {sleep_rec_err}")
+
+        if isinstance(p1_data.get("habit_action"), dict):
+            try:
+                ai_ha_note = habit_engine.execute_ai_habit_action(p1_data["habit_action"])
+                p1_data["_pre_executed_habit"] = True
+                if ai_ha_note:
+                    action_exec_notes.append(ai_ha_note)
+                    logger.info(f"🧠 [AI-First Habit]: {p1_data['habit_action']} -> {ai_ha_note}")
+            except Exception as ha_err:
+                logger.warning(f"⚠️ [AI-First habit]: {ha_err}")
+
+    if action_exec_notes:
+        exec_block = "=== KẾT QUẢ THỰC THI LỆNH TỪ PASS 1 (PHẢI NÓI ĐÚNG SỰ THẬT NÀY) ===\n" + "\n".join(action_exec_notes)
+        now_playing_text = (
+            f"{now_playing_text}\n{exec_block}".strip()
+            if now_playing_text
+            else exec_block
+        )
 
     # Nếu Pass 1 tự quyết định cần kiểm tra thiết bị / không khí phòng -> gọi MCP tools song song cho Pass 2 & Pass 3
     raw_fetch_tools = p1_data.get("fetch_tools")
@@ -1493,14 +1783,16 @@ async def chat_with_linh_dan(user_id: int, user_message: str,
     web_facts_block = ""
     if extra_system_note:
         web_facts_block += f"\n{extra_system_note.strip()}\n"
+    if action_exec_notes:
+        web_facts_block += "\n" + "\n".join(action_exec_notes) + "\n"
     web_query = p1_data.get("web_search_query")
     if isinstance(web_query, str) and web_query.strip() and web_query.strip().lower() != "null":
         import web_helper
         grounded_facts = await web_helper.search_with_gemini_grounding(web_query.strip(), text_content)
         if grounded_facts:
             p_cfg = persona.get_persona_config()
-            web_facts_block = (
-                f"\nTHÔNG TIN THỰC TẾ {p_cfg['butler_name'].upper()} VỪA TRA CỨU ĐƯỢC (trả lời chính xác, tự nhiên):\n"
+            web_facts_block += (
+                f"\nTHÔNG TIN THỰC TẾ {p_cfg['butler_name'].upper()} VỪA TRA CỨU ĐƯỢC (trả lời đúng số liệu này, tự nhiên):\n"
                 f"{grounded_facts}\n"
             )
 
@@ -2126,7 +2418,7 @@ async def _run_pass2_polisher(
             f"(xưng '{p_cfg['self_ref']}', gọi {owner_name}, giọng điệu: {p_cfg['tone_desc']})."
         )
 
-    recent_bot_texts = _extract_recent_bot_texts(recent, limit=4)
+    recent_bot_texts = _extract_recent_bot_texts(recent, limit=6)
 
     context_sections: List[str] = [
         diary_helper.format_authoritative_time_banner(effective_time_ctx, now_ts=now_v),
@@ -2141,13 +2433,22 @@ async def _run_pass2_polisher(
     if session_state_text and session_state_text.strip():
         context_sections.append(
             session_state_text.strip()
-            + "\n(NGUYÊN TẮC BẮT BUỘC PASS 2: việc [ĐÃ XONG] không hỏi lại như sắp làm; "
-            "việc chỉ là [THÔNG BÁO / DỰ ĐỊNH] không tự bịa thành 'đã hứa'.)"
+            + "\n(NGUYÊN TẮC BẮT BUỘC PASS 2: Nếu đang ĐANG TRONG CUỘC GỌI thì CẤM nói 'tí nữa call/lát gọi'; "
+            "việc [ĐÃ XONG] không hỏi lại như sắp làm; việc chỉ là [THÔNG BÁO / DỰ ĐỊNH] tuyệt đối KHÔNG nói 'như đã hứa/giữ lời hứa'; "
+            "câu/chi tiết đã đánh dấu [ĐÃ KỂ Ở LƯỢT TRƯỚC] hoặc [ĐÃ NHẮC Ở LƯỢT TRƯỚC] thì TUYỆT ĐỐI KHÔNG nhắc lại ra miệng.)"
         )
     if baseline_facts:
         facts_lines = "\n".join(f"• {f}" for f in baseline_facts[:6] if str(f).strip())
         if facts_lines:
             context_sections.append(f"=== HỒ SƠ NỀN {owner_name.upper()} (PHẢI NHỚ ĐÚNG) ===\n" + facts_lines)
+    if text_content and not text_content.lstrip().startswith("[Chủ động"):
+        pronoun_hint = resolve_pronoun_referent_hint(text_content)
+        if pronoun_hint:
+            context_sections.append("=== LƯU Ý XƯNG HÔ LƯỢT NÀY ===\n" + pronoun_hint)
+
+    style_guard_notes = _build_recent_repetition_guard_notes(recent_bot_texts, text_content)
+    if style_guard_notes:
+        context_sections.append("=== NHẮC NHỞ CHỐNG LẶP & PHONG CÁCH LƯỢT NÀY ===\n" + "\n".join(style_guard_notes))
 
     grounding_block = ("\n\n".join(context_sections) + "\n\n") if context_sections else ""
     if text_content and not text_content.lstrip().startswith("[Chủ động"):
@@ -2216,9 +2517,19 @@ BỐI CẢNH / CÂU {owner_name.upper()} VỪA NHẮN:
         has_voice_payload = bool(out_voice_holder is not None and attempt_vt)
         if not attempt_msgs and not has_voice_payload:
             break
-        final_messages = attempt_msgs
+        final_messages, trimmed_vt, did_trim = _trim_repetitive_trailing_sentences(
+            attempt_msgs,
+            recent_bot_texts,
+            user_text=text_content,
+            voice_text=attempt_vt,
+        )
+        if did_trim:
+            logger.info("✂️ [Pass 2 0ms Tail-Trim]: Đã cắt gọn câu đuôi lặp lại lời dặn/bối cảnh cũ.")
+        if out_voice_holder is not None and trimmed_vt is not None:
+            attempt_vt = trimmed_vt
+            out_voice_holder["voice_text"] = trimmed_vt
         dup_prev = _find_repetitive_previous_msg(
-            attempt_msgs, recent_bot_texts, candidate_voice=attempt_vt
+            final_messages, recent_bot_texts, candidate_voice=attempt_vt, user_text=text_content
         )
         if not dup_prev or attempt == 1:
             break
@@ -2522,8 +2833,6 @@ YÊU CẦU ĐẦU RA (3 mục ngắn gọn, thực tế):
     )
 
 
-# Alias rõ nghĩa cho Smart Butler (giữ tên cũ để tương thích ngược module gọi)
-chat_with_butler = chat_with_linh_dan
 
 
 def get_api_quota_status() -> Dict[str, Any]:

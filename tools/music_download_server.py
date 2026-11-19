@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -29,6 +30,11 @@ import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
+
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -709,6 +715,181 @@ def _is_authorized(request: web.Request, api_key: str) -> bool:
     return bool(supplied) and hmac.compare_digest(supplied, api_key)
 
 
+_WASAPI_LOOPBACK_PS_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public class DsWasapiLoopback {
+    [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+    private class MMDeviceEnumeratorComObject { }
+
+    [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMMDeviceEnumerator {
+        int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+        int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppEndpoint);
+    }
+
+    [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMMDevice {
+        int Activate(ref Guid iid, int dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
+    }
+
+    [Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioClient {
+        int Initialize(int ShareMode, int StreamFlags, long hnsBufferDuration, long hnsPeriodicity, IntPtr pFormat, IntPtr AudioSessionGuid);
+        int GetBufferSize(out uint pNumBufferFrames);
+        int GetStreamLatency(out long phnsLatency);
+        int GetCurrentPadding(out uint pNumPaddingFrames);
+        int IsFormatSupported(int ShareMode, IntPtr pFormat, out IntPtr ppClosestMatch);
+        int GetMixFormat(out IntPtr ppDeviceFormat);
+        int GetDevicePeriod(out long phnsDefaultDevicePeriod, out long phnsMinimumDevicePeriod);
+        int Start();
+        int Stop();
+        int Reset();
+        int SetEventHandle(IntPtr eventHandle);
+        int GetService(ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
+    }
+
+    [Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IAudioCaptureClient {
+        int GetBuffer(out IntPtr ppData, out uint pNumFramesToRead, out uint pdwFlags, out ulong pu64DevicePosition, out ulong pu64QPCPosition);
+        int ReleaseBuffer(uint NumFramesRead);
+        int GetNextPacketSize(out uint pNumFramesInNextPacket);
+    }
+
+    public static void StreamLoopback24kMono() {
+        var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+        IMMDevice dev;
+        Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 0, out dev));
+        Guid iidClient = new Guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
+        object objClient;
+        Marshal.ThrowExceptionForHR(dev.Activate(ref iidClient, 23, IntPtr.Zero, out objClient));
+        var client = (IAudioClient)objClient;
+
+        IntPtr fmtPtr;
+        Marshal.ThrowExceptionForHR(client.GetMixFormat(out fmtPtr));
+        ushort tag = (ushort)Marshal.ReadInt16(fmtPtr, 0);
+        int channels = Math.Max(1, (int)Marshal.ReadInt16(fmtPtr, 2));
+        int sr = Math.Max(8000, Marshal.ReadInt32(fmtPtr, 4));
+        int blockAlign = Math.Max(2, (int)Marshal.ReadInt16(fmtPtr, 12));
+        int bits = (int)Marshal.ReadInt16(fmtPtr, 14);
+        int subTag = (tag == 0xFFFE) ? Marshal.ReadInt32(fmtPtr, 24) : (int)tag;
+        bool isFloat = (subTag == 3 && bits == 32);
+
+        Marshal.ThrowExceptionForHR(client.Initialize(0, 0x00020000, 1000000, 0, fmtPtr, IntPtr.Zero));
+        Guid iidCap = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
+        object objCap;
+        Marshal.ThrowExceptionForHR(client.GetService(ref iidCap, out objCap));
+        var cap = (IAudioCaptureClient)objCap;
+
+        Marshal.ThrowExceptionForHR(client.Start());
+        Stream stdout = Console.OpenStandardOutput();
+        byte[] raw = new byte[65536];
+        byte[] outFrame = new byte[960];
+        byte[] zeroFrame = new byte[960];
+        int outPos = 0;
+        double step = (double)sr / 24000.0;
+        double phase = 0.0;
+        float prevSample = 0f;
+        long lastEmitMs = Environment.TickCount;
+
+        try {
+            while (true) {
+                uint nextPkt = 0;
+                Marshal.ThrowExceptionForHR(cap.GetNextPacketSize(out nextPkt));
+                bool gotAudio = false;
+                while (nextPkt > 0) {
+                    IntPtr dataPtr;
+                    uint frames = 0;
+                    uint flags = 0;
+                    ulong devPos, qpcPos;
+                    Marshal.ThrowExceptionForHR(cap.GetBuffer(out dataPtr, out frames, out flags, out devPos, out qpcPos));
+                    try {
+                        int nFrames = (int)frames;
+                        if (nFrames > 0) {
+                            gotAudio = true;
+                            int byteCount = nFrames * blockAlign;
+                            if (byteCount > raw.Length) raw = new byte[byteCount];
+                            bool silentFlag = (flags & 0x2U) != 0U;
+                            if (!silentFlag) {
+                                Marshal.Copy(dataPtr, raw, 0, byteCount);
+                            } else {
+                                Array.Clear(raw, 0, byteCount);
+                            }
+
+                            for (int f = 0; f < nFrames; f++) {
+                                float mono = 0f;
+                                if (!silentFlag) {
+                                    int baseOff = f * blockAlign;
+                                    if (isFloat) {
+                                        for (int c = 0; c < channels; c++) {
+                                            mono += BitConverter.ToSingle(raw, baseOff + c * 4);
+                                        }
+                                        mono /= (float)channels;
+                                    } else if (bits == 16) {
+                                        for (int c = 0; c < channels; c++) {
+                                            mono += (float)BitConverter.ToInt16(raw, baseOff + c * 2) / 32768f;
+                                        }
+                                        mono /= (float)channels;
+                                    }
+                                }
+                                phase += 1.0;
+                                while (phase >= step) {
+                                    phase -= step;
+                                    float frac = (float)Math.Max(0.0, Math.Min(1.0, 1.0 - phase));
+                                    float interp = prevSample + (mono - prevSample) * frac;
+                                    int s16 = (int)Math.Round(interp * 32767.0f);
+                                    if (s16 > 32767) s16 = 32767;
+                                    else if (s16 < -32768) s16 = -32768;
+                                    outFrame[outPos++] = (byte)(s16 & 0xFF);
+                                    outFrame[outPos++] = (byte)((s16 >> 8) & 0xFF);
+                                    if (outPos >= 960) {
+                                        stdout.Write(outFrame, 0, 960);
+                                        stdout.Flush();
+                                        outPos = 0;
+                                        lastEmitMs = Environment.TickCount;
+                                    }
+                                }
+                                prevSample = mono;
+                            }
+                        }
+                    } finally {
+                        cap.ReleaseBuffer(frames);
+                    }
+                    Marshal.ThrowExceptionForHR(cap.GetNextPacketSize(out nextPkt));
+                }
+                if (!gotAudio) {
+                    int nowMs = Environment.TickCount;
+                    if (unchecked(nowMs - (int)lastEmitMs) >= 25) {
+                        if (outPos > 0) {
+                            Array.Clear(outFrame, outPos, 960 - outPos);
+                            stdout.Write(outFrame, 0, 960);
+                            outPos = 0;
+                        } else {
+                            stdout.Write(zeroFrame, 0, 960);
+                        }
+                        stdout.Flush();
+                        lastEmitMs = nowMs;
+                    }
+                    Thread.Sleep(6);
+                }
+            }
+        } catch (IOException) {
+        } finally {
+            try { client.Stop(); } catch { }
+            Marshal.FreeCoTaskMem(fmtPtr);
+        }
+    }
+}
+"@
+[DsWasapiLoopback]::StreamLoopback24kMono()
+""".strip()
+
+
 def create_app(worker: MusicDownloadWorker, api_key: str = "") -> web.Application:
     app = web.Application()
 
@@ -787,6 +968,48 @@ def create_app(worker: MusicDownloadWorker, api_key: str = "") -> web.Applicatio
         removed = worker.remove_token(token)
         return web.json_response({"ok": True, "removed": removed})
 
+    async def handle_live_audio_ws(request: web.Request) -> web.StreamResponse:
+        if os.name != "nt":
+            return web.json_response({"ok": False, "error": "WASAPI Loopback chi ho tro tren Windows."}, status=501)
+        ws = web.WebSocketResponse(heartbeat=15.0)
+        await ws.prepare(request)
+        proc = await _spawn_wasapi_loopback_proc()
+
+        async def _pump_stdout() -> None:
+            assert proc.stdout is not None
+            while not ws.closed:
+                try:
+                    chunk = await proc.stdout.readexactly(1920)
+                except asyncio.IncompleteReadError as exc:
+                    if exc.partial and not ws.closed:
+                        await ws.send_bytes(exc.partial)
+                    break
+                if not chunk or ws.closed:
+                    break
+                await ws.send_bytes(chunk)
+
+        async def _read_ws() -> None:
+            async for msg in ws:
+                if msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSED, web.WSMsgType.ERROR):
+                    break
+
+        pump_task = asyncio.create_task(_pump_stdout())
+        ws_task = asyncio.create_task(_read_ws())
+        try:
+            await asyncio.wait({pump_task, ws_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in (pump_task, ws_task):
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(pump_task, ws_task, return_exceptions=True)
+            await _stop_proc(proc)
+            if not ws.closed:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+        return ws
+
     cleanup_task = None
 
     async def start_cleanup(app_obj: web.Application):
@@ -823,7 +1046,119 @@ def create_app(worker: MusicDownloadWorker, api_key: str = "") -> web.Applicatio
     app.router.add_post("/download", handle_download)
     app.router.add_get("/files/{token}", handle_file_get)
     app.router.add_delete("/files/{token}", handle_file_delete)
+    app.router.add_get("/live_audio/ws", handle_live_audio_ws)
     return app
+
+
+async def _spawn_wasapi_loopback_proc() -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        _WASAPI_LOOPBACK_PS_SCRIPT,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+async def _stop_proc(proc: Optional[asyncio.subprocess.Process]) -> None:
+    if proc is not None and proc.returncode is None:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+
+
+def _load_env_fallback() -> Dict[str, str]:
+    vals: Dict[str, str] = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for env_file in (os.path.join(here, ".env"), os.path.join(os.path.dirname(here), ".env")):
+        if not os.path.isfile(env_file):
+            continue
+        try:
+            with open(env_file, "r", encoding="utf-8") as ef:
+                for raw_ln in ef:
+                    ln = raw_ln.strip()
+                    if not ln or ln.startswith("#") or "=" not in ln:
+                        continue
+                    ek, ev = ln.split("=", 1)
+                    k = ek.strip()
+                    v = ev.strip().strip("\"'")
+                    if k and v and k not in vals:
+                        vals[k] = v
+        except OSError:
+            pass
+    return vals
+
+
+async def run_push_live_speaker(openstick_url: str, pin: str = "", label: str = "") -> None:
+    """Chế độ đẩy trực tiếp WASAPI Loopback từ PC hiện tại lên OpenStick (không cần mở cổng firewall inbound)."""
+    if os.name != "nt":
+        raise RuntimeError("--push-live chỉ hỗ trợ trên Windows.")
+    import aiohttp
+    import platform
+
+    base = str(openstick_url or "http://192.168.1.100:8080").strip().rstrip("/")
+    if base.startswith("https://"):
+        ws_base = "wss://" + base[len("https://"):]
+    elif base.startswith("http://"):
+        ws_base = "ws://" + base[len("http://"):]
+    else:
+        ws_base = "ws://" + base
+    lbl = label.strip() or f"💻 PC {platform.node() or 'Windows'}"
+    qs = urllib.parse.urlencode({"source": "pc_loopback", "label": lbl})
+    ws_url = f"{ws_base}/api/jukebox/live_ws?{qs}"
+    headers = {"X-Dashboard-Pin": pin} if pin else {}
+
+    proc: Optional[asyncio.subprocess.Process] = None
+    timeout = aiohttp.ClientTimeout(total=None, connect=5.0)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.ws_connect(ws_url, headers=headers, heartbeat=15.0) as ws:
+            logger.info(f"🔊 [Push Live Speaker] Đã kết nối {ws_url} ({lbl}) — nhấn Ctrl+C để dừng.")
+            proc = await _spawn_wasapi_loopback_proc()
+
+            async def _pump() -> None:
+                assert proc is not None and proc.stdout is not None
+                while not ws.closed:
+                    try:
+                        chunk = await proc.stdout.readexactly(1920)
+                    except asyncio.IncompleteReadError as exc:
+                        if exc.partial and not ws.closed:
+                            await ws.send_bytes(exc.partial)
+                        break
+                    if not chunk or ws.closed:
+                        break
+                    await ws.send_bytes(chunk)
+
+            async def _listen() -> None:
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            obj = json.loads(msg.data)
+                        except Exception:
+                            obj = {}
+                        if obj.get("type") == "live_stopped":
+                            logger.info(f"⏹️ [Push Live Speaker] Đã dừng từ OpenStick ({obj.get('reason')}).")
+                            break
+                    elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        break
+
+            pump_task = asyncio.create_task(_pump())
+            listen_task = asyncio.create_task(_listen())
+            try:
+                await asyncio.wait({pump_task, listen_task}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for t in (pump_task, listen_task):
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(pump_task, listen_task, return_exceptions=True)
+                await _stop_proc(proc)
 
 
 def main():
@@ -839,7 +1174,7 @@ def main():
     parser.add_argument(
         "--api-key",
         default="",
-        help="API key xác thực header X-API-Key (mặc định đọc MUSIC_DL_API_KEY / TTS_API_KEY hoặc .env cùng thư mục)",
+        help="API key xác thực header X-API-Key (mặc định đọc MUSIC_DL_API_KEY / TTS_API_KEY hoặc .env)",
     )
     parser.add_argument(
         "--cache-dir",
@@ -848,24 +1183,30 @@ def main():
     )
     parser.add_argument("--cookies", default="", help="Đường dẫn youtube_cookies.txt tùy chọn trên PC")
     parser.add_argument("--ttl", type=float, default=_DEFAULT_FILE_TTL_SEC, help="Thời gian giữ file tạm (giây)")
+    parser.add_argument("--push-live", action="store_true", help="Đẩy trực tiếp âm thanh PC lên loa OpenStick qua WebSocket")
+    parser.add_argument("--openstick-url", default="", help="URL OpenStick khi dùng --push-live")
+    parser.add_argument("--pin", default="", help="PIN Dashboard khi dùng --push-live")
+    parser.add_argument("--label", default="", help="Tên hiển thị thiết bị khi dùng --push-live")
     args = parser.parse_args()
 
-    effective_key = (args.api_key or os.getenv("MUSIC_DL_API_KEY") or os.getenv("TTS_API_KEY") or "").strip()
-    if not effective_key:
-        env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-        if os.path.isfile(env_file):
-            try:
-                with open(env_file, "r", encoding="utf-8") as ef:
-                    for raw_ln in ef:
-                        ln = raw_ln.strip()
-                        if not ln or ln.startswith("#") or "=" not in ln:
-                            continue
-                        ek, ev = ln.split("=", 1)
-                        if ek.strip() in ("MUSIC_DL_API_KEY", "TTS_API_KEY") and ev.strip():
-                            effective_key = ev.strip().strip("\"'")
-                            break
-            except OSError:
-                pass
+    env_fallback = _load_env_fallback()
+    if args.push_live:
+        openstick_url = (args.openstick_url or os.getenv("OPENSTICK_URL") or env_fallback.get("OPENSTICK_URL") or "http://192.168.1.100:8080").strip()
+        pin = (args.pin or os.getenv("DASHBOARD_PIN") or env_fallback.get("DASHBOARD_PIN") or "").strip()
+        try:
+            asyncio.run(run_push_live_speaker(openstick_url, pin=pin, label=args.label))
+        except KeyboardInterrupt:
+            pass
+        return
+
+    effective_key = (
+        args.api_key
+        or os.getenv("MUSIC_DL_API_KEY")
+        or os.getenv("TTS_API_KEY")
+        or env_fallback.get("MUSIC_DL_API_KEY")
+        or env_fallback.get("TTS_API_KEY")
+        or ""
+    ).strip()
 
     worker = MusicDownloadWorker(
         cache_dir=args.cache_dir,

@@ -248,6 +248,26 @@ def parse_vn_clock_to_ts(
     return candidate_vn.timestamp()
 
 
+def resolve_device_schedule_ts(
+    at_time_vn: Any = None,
+    delay_minutes: Any = None,
+    now_ts: Optional[float] = None,
+) -> Optional[float]:
+    """Quy đổi thời điểm hẹn bật/tắt thiết bị từ `delay_minutes` hoặc giờ VN (`HH:MM` / `10h tối`)."""
+    base_now = float(now_ts if now_ts is not None else time.time())
+    if delay_minutes is not None and str(delay_minutes).strip().lower() not in ("", "null", "none"):
+        try:
+            mins = max(0.5, min(1440.0, float(delay_minutes)))
+            return base_now + mins * 60.0
+        except (TypeError, ValueError):
+            pass
+    if at_time_vn is not None:
+        parsed_ts = parse_vn_clock_to_ts(str(at_time_vn), now_ts=base_now, roll_forward_if_past=True)
+        if parsed_ts is not None:
+            return max(base_now + 2.0, parsed_ts)
+    return None
+
+
 def extract_vn_clock_candidates(
     text: str,
     ref_dt: datetime.datetime,
