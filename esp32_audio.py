@@ -821,7 +821,12 @@ def _classify_yt_dlp_error(stdout_s: str, stderr_s: str, rc: int) -> Tuple[str, 
             "js_challenge",
             "yt-dlp thiếu JavaScript runtime/EJS solver để giải mã YouTube (cần cập nhật yt-dlp, yt-dlp-ejs và cài quickjs/node).",
         )
-    if "video unavailable" in low or "private video" in low or "requested format is not available" in low:
+    if (
+        "video unavailable" in low
+        or "private video" in low
+        or "requested format is not available" in low
+        or "the page needs to be reloaded" in low
+    ):
         return "unavailable", f"Video/định dạng không khả dụng: {detail[:160]}"
     if rc != 0:
         return "yt_dlp_error", f"yt-dlp lỗi ({rc}): {detail[:180]}"
@@ -858,6 +863,12 @@ def _clean_oembed_search_title(title: str) -> str:
         r"[\[\(][^\]\)]{1,40}(?:official|mv|lyric|lyrics|audio|live|hd|4k|video|visualizer)[^\]\)]{0,40}[\]\)]",
         " ",
         raw,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(
+        r"\b(?:official\s+(?:mv|music\s+video|performance(?:\s+video)?|lyric(?:s)?(?:\s+video)?|audio|video|visualizer))\b",
+        " ",
+        s,
         flags=re.IGNORECASE,
     )
     s = re.sub(r"[\U0001F1E0-\U0001FAFF\u2600-\u27BF\uFE0F\u200D|#♪♫★☆•·~]+", " ", s)
@@ -1725,7 +1736,7 @@ async def search_and_cache_track(
                 return res, "", ""
 
             # Nếu YouTube đòi xác minh/lỗi JS/format -> lấy tên bài qua oEmbed công khai và tìm bản tương đương trên SoundCloud
-            if err_code in ("bot_check", "unavailable", "js_challenge"):
+            if err_code in ("bot_check", "unavailable", "js_challenge", "yt_dlp_error"):
                 meta = await _fetch_youtube_oembed(clean_yt)
                 if meta and meta.get("title"):
                     sc_queries = _build_soundcloud_fallback_queries(meta["title"])

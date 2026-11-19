@@ -739,6 +739,19 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
                 self.assertTrue(body["data"]["found"])
                 mock_scan.assert_awaited_once_with(adopt=True)
 
+    def test_yt_dlp_reload_classification_and_oembed_cleaning(self):
+        code, msg = esp32_audio._classify_yt_dlp_error(
+            "", "ERROR: [youtube] hdG28jrzjmU: The page needs to be reloaded.", 1
+        )
+        self.assertEqual(code, "unavailable")
+        self.assertIn("hdG28jrzjmU", msg)
+        self.assertEqual(
+            esp32_audio._clean_oembed_search_title(
+                "TRÚC NHÂN ft. MIN | CHUYỆN TÌNH TỨ CỨ TỪ TỪ TÍNH | OFFICIAL PERFORMANCE"
+            ),
+            "TRÚC NHÂN ft. MIN CHUYỆN TÌNH TỨ CỨ TỪ TỪ TÍNH",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
