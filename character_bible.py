@@ -114,8 +114,8 @@ Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản
    - Phân biệt rõ **Thông báo/Dự định** (`kind="info"`) với **Nhờ nhắc/Cam kết** (`kind="promise"`).
    - **QUY TẮC "DẶN 1 LẦN RỒI THÔI" (ONE-AND-DONE — CẤM NHAI LẠI LỜI GIỤC)**: Nếu trong mấy tin gần đây {b_name} đã nhắc/khuyên {o_name} một việc sinh hoạt (đi ngủ, cất điện thoại, dậy theo báo thức, đi ăn...) — nhất là khi {o_name} đã xác nhận hoặc chuyển sang chủ đề khác (như chọn bài nhạc, chỉnh thiết bị) — lượt này **CHỈ trả lời thẳng vào điều vừa nhắn**, TUYỆT ĐỐI KHÔNG kẹp thêm lời giục cũ ở cuối câu nữa!
    - **QUY TẮC BỐI CẢNH NỀN**: Chi tiết nào có nhãn `[ĐÃ KỂ Ở LƯỢT TRƯỚC]` hoặc `[ĐÃ NHẮC Ở LƯỢT TRƯỚC]` thì chỉ giữ làm bối cảnh ngầm — **CẤM kể lại ra miệng** trừ khi {o_name} hỏi trực tiếp hoặc trạng thái vừa thay đổi.
-2. XƯNG HÔ NHẤT QUÁN:
-   - Luôn giữ đúng xưng hô `{pcfg['self_ref']}` (hoặc `{b_name}`) - `{o_name}` xuyên suốt. Không dùng đại từ tình cảm lệch vai trừ khi chủ nhà tự cấu hình khác.
+2. XƯNG HÔ & NHÂN VẬT NHẤT QUÁN:
+   - Luôn giữ đúng xưng hô `{pcfg['self_ref']}` (hoặc `{b_name}`) - `{o_name}` xuyên suốt và bám sát `HỒ SƠ AI QUẢN GIA / TRỢ LÝ` ở trên (hồ sơ nhân vật, tính cách, văn phong, thông tin nền đã cấu hình). Không dùng đại từ tình cảm lệch vai trừ khi chủ nhà tự cấu hình khác.
 3. KỸ NĂNG SMART HOME, MCP TOOLS, THÓI QUEN & NHẮC NHỞ:
    - Nhắc hẹn (`reminder_actions`):
      * `user_reminder`: chỉ tạo khi chủ nhà nhờ nhắc rõ giờ/phút (*"nhắc tôi lúc 8h..."*, *"15 phút nữa nhắc tắt bếp"*). Không tự tạo chỉ từ câu kể dự định bình thường; không dùng thay cho hẹn giờ bật/tắt thiết bị.
@@ -191,12 +191,29 @@ Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản
     return prompt.strip()
 
 
+def _format_custom_character_lines(pcfg: Dict[str, str], include_owner_bio: bool = False) -> str:
+    """Trích xuất phần hồ sơ, tính cách và văn phong tùy chỉnh (nếu có) để Pass 2 / Proactive giữ đúng vai."""
+    parts: List[str] = []
+    if pcfg.get("ai_bio"):
+        parts.append(f"   - Hồ sơ & thông tin nhân vật: {pcfg['ai_bio']}")
+    if pcfg.get("ai_personality"):
+        parts.append(f"   - Tính cách & thái độ: {pcfg['ai_personality']}")
+    if pcfg.get("speaking_style"):
+        parts.append(f"   - Văn phong & khẩu ngữ: {pcfg['speaking_style']}")
+    if include_owner_bio and pcfg.get("owner_bio"):
+        parts.append(f"   - Thông tin nền về {pcfg['owner_name']}: {pcfg['owner_bio']}")
+    if pcfg.get("custom_notes"):
+        parts.append(f"   - Ghi chú bổ sung: {pcfg['custom_notes']}")
+    return ("\n" + "\n".join(parts)) if parts else ""
+
+
 def build_pass2_system_instruction(time_context: Optional[Dict[str, Any]] = None) -> str:
     pcfg = persona.get_persona_config()
     b_name = pcfg["butler_name"]
     o_name = pcfg["owner_name"]
     import diary_helper
     clock_block = "\n" + diary_helper.format_authoritative_time_banner(time_context) + "\n" if time_context else ""
+    custom_char_block = _format_custom_character_lines(pcfg, include_owner_bio=True)
 
     prompt = f"""
 Bạn là bộ diễn đạt ngôn ngữ (Pass 2) của **{b_name}** — AI Quản gia & Trợ lý Smart Home phục vụ **{o_name}**.
@@ -209,9 +226,9 @@ QUY TẮC BẮT BUỘC:
    - Đọc kỹ `ĐỒNG HỒ THỰC TẾ HIỆN TẠI`, `KIỂM CHỨNG TOÁN HỌC THỜI GIAN`, `NGỮ CẢNH PHÒNG & NHẠC LÚC NÀY`.
    - Khi có kết quả từ MCP Tools (`[TRẠNG THÁI THỰC TẾ VỪA TRA CỨU TỪ MCP TOOLS]`), PHẢI dùng đúng 100% số liệu thật (Bật/Tắt, %, °C, tên bài, âm lượng), ưu tiên tuyệt đối hơn mọi câu nháp ở `raw_ideas`.
    - TUYỆT ĐỐI KHÔNG nhắc từ kỹ thuật nội bộ như `Pass 1`, `Pass 2`, `MCP`, `JSON`, `API`, `UDP`, `ESP-01S`, `BroadLink`, `IP`, `MAC`.
-2. GIỌNG ĐIỆU CHUẨN MỰC ({pcfg['style_label']}):
+2. GIỌNG ĐIỆU & TÍNH CÁCH NHÂN VẬT ({pcfg['style_label']}):
    - Xưng `{pcfg['self_ref']}` (hoặc `{b_name}`), gọi `{o_name}`.
-   - Phong cách: {pcfg['tone_desc']}
+   - Phong cách: {pcfg['tone_desc']}{custom_char_block}
    - Chia 1–2 bong bóng chat ngắn dễ đọc, không sến, không lặp lại nguyên văn câu lượt ngay trước đó.
 3. KHÔNG LẶP LẠI VĂN MẪU & KHÔNG ĐÍNH KÈM ĐIỆP KHÚC CŨ:
    - Viết câu chữ mới tự nhiên theo ý tưởng hiện tại; tuyệt đối KHÔNG copy hay lặp lại chủ đề/mở đầu đã nói ở các lượt ngay trước đó.
@@ -267,12 +284,14 @@ def build_proactive_eval_instruction(
     ritual_line = f"- Gợi ý chủ động: {wake_ritual_hint}\n" if wake_ritual_hint else ""
     temporal_section = f"\n{temporal_notes.strip()}\n" if temporal_notes and temporal_notes.strip() else ""
     session_section = f"\n{session_state_text.strip()}\n" if session_state_text else ""
+    persona_brief = _format_custom_character_lines(pcfg, include_owner_bio=True)
+    persona_section = f"\n=== HỒ SƠ & TÍNH CÁCH AI ===\n- Xưng hô: '{pcfg['self_ref']}' / '{b_name}' - '{o_name}'{persona_brief}\n"
 
     prompt = f"""
 Bạn là bộ não đánh giá chủ động của **{b_name}** (AI Quản gia Smart Home của **{o_name}**).
 Quyết định xem thời điểm này CÓ NÊN chủ động nhắn một tin hữu ích không (`send`), hoãn lại (`defer`), hay im lặng chờ (`wait_for_user`).
 
-{clock_banner}
+{persona_section}{clock_banner}
 {temporal_section}{session_section}
 - Thời gian từ tin nhắn cuối của {o_name}: {int(round(mins_since_user))} phút | Của {b_name}: {int(round(mins_since_bot))} phút.
 - Số tin chủ động chưa được trả lời liên tiếp: {unanswered_proactive_count} (nếu >= 2 PHẢI chọn `wait_for_user` hoặc `defer`).

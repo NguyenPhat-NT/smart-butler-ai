@@ -91,8 +91,13 @@ class SmartButlerBaseTest(unittest.TestCase):
         persona.save_persona_config({
             "butler_name": "Atlas",
             "owner_name": "Chủ nhà",
+            "self_pronoun": "",
             "style": "butler",
             "weather_city": "Ho_Chi_Minh_City",
+            "ai_bio": "",
+            "ai_personality": "",
+            "speaking_style": "",
+            "owner_bio": "",
             "custom_notes": "",
         })
 
@@ -141,14 +146,22 @@ class TestPersonaAndPrompts(SmartButlerBaseTest):
         saved = persona.save_persona_config({
             "butler_name": "Jarvis",
             "owner_name": "Minh",
+            "self_pronoun": "tôi",
             "style": "assistant",
             "weather_city": "Hanoi",
+            "ai_bio": "Trợ lý kỹ thuật 25 tuổi am hiểu Smart Home.",
+            "ai_personality": "Thẳng thắn, tinh tế và đáng tin cậy.",
+            "speaking_style": "Gãy gọn 1-2 câu, tránh lặp ý.",
+            "owner_bio": "Kỹ sư hệ thống thích nhạc Instrumental.",
             "custom_notes": "Luôn báo ngắn gọn 2 câu.",
         })
         self.assertEqual(saved["butler_name"], "Jarvis")
         self.assertEqual(saved["owner_name"], "Minh")
+        self.assertEqual(saved["self_pronoun"], "tôi")
+        self.assertEqual(saved["self_ref"], "tôi")
         self.assertEqual(saved["style"], "assistant")
         self.assertEqual(saved["weather_city"], "Hanoi")
+        self.assertIn("25 tuổi", saved["prompt_preview"])
 
         p1 = character_bible.build_pass1_system_instruction(
             affinity_score=80,
@@ -170,8 +183,14 @@ class TestPersonaAndPrompts(SmartButlerBaseTest):
         for txt in (p1, p2, p3, pe):
             self.assertIn("Jarvis", txt)
             self.assertIn("Minh", txt)
+        for txt in (p1, p2, pe):
+            self.assertIn("Trợ lý kỹ thuật 25 tuổi am hiểu Smart Home", txt)
+            self.assertIn("Thẳng thắn, tinh tế và đáng tin cậy", txt)
+            self.assertIn("Gãy gọn 1-2 câu, tránh lặp ý", txt)
+            self.assertIn("Kỹ sư hệ thống thích nhạc Instrumental", txt)
         self.assertIn("Hanoi", p1)
         self.assertIn("Luôn báo ngắn gọn 2 câu", p1)
+        self.assertIn("Luôn báo ngắn gọn 2 câu", p2)
         self.assertIn("fetch_tools", p1)
         self.assertIn("habit_action", p1)
 
@@ -447,14 +466,23 @@ class TestThreePassPipelineAndDashboard(unittest.IsolatedAsyncioTestCase):
             patch_p = await client.patch("/api/persona", json={
                 "butler_name": "Friday",
                 "owner_name": "Khoa",
+                "self_pronoun": "tớ",
                 "style": "companion",
                 "weather_city": "Da_Nang",
+                "ai_bio": "Bạn đồng hành yêu công nghệ.",
+                "ai_personality": "Hài hước và thân thiện.",
+                "speaking_style": "Câu ngắn tự nhiên.",
+                "owner_bio": "Làm việc từ xa ban đêm.",
             })
             self.assertEqual(patch_p.status, 200)
             p_res = (await patch_p.json())["data"]
             self.assertEqual(p_res["butler_name"], "Friday")
             self.assertEqual(p_res["owner_name"], "Khoa")
+            self.assertEqual(p_res["self_ref"], "tớ")
             self.assertEqual(p_res["style"], "companion")
+            self.assertEqual(p_res["ai_bio"], "Bạn đồng hành yêu công nghệ.")
+            self.assertEqual(p_res["ai_personality"], "Hài hước và thân thiện.")
+            self.assertIn("Hài hước và thân thiện", p_res["prompt_preview"])
 
             j_res = await client.get("/api/journal")
             self.assertEqual(j_res.status, 200)

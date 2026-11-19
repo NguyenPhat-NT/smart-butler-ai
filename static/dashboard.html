@@ -273,6 +273,7 @@
               <a href="#secFan" class="btn-pill">🌬️ Quạt BLDC</a>
               <a href="#secJukebox" class="btn-pill">🔊 Loa &amp; Nhạc</a>
               <a href="#secSystem" class="btn-pill">📊 Hệ thống</a>
+              <a href="#tab-profile" id="btnJumpPersonaTab" class="btn-pill">🎭 Hồ sơ AI</a>
             </div>
           </div>
           <div class="row" style="gap:8px;">
@@ -795,40 +796,78 @@
       <section id="tab-profile" class="tab-panel hidden">
         <div class="grid grid-2">
           <div class="card">
-            <h2>🎭 Cấu Hình Quản Gia / Trợ Lý AI</h2>
+            <div class="row between" style="margin-bottom:6px;">
+              <h2 style="margin:0;">🎭 Hồ Sơ, Tính Cách &amp; Thông Tin AI</h2>
+              <div class="row" style="gap:4px;">
+                <button type="button" id="btnTplButler" class="btn-sm" title="Điền mẫu Quản gia điềm đạm">Mẫu Quản gia</button>
+                <button type="button" id="btnTplAssistant" class="btn-sm" title="Điền mẫu Trợ lý gọn gàng">Mẫu Trợ lý</button>
+                <button type="button" id="btnTplCompanion" class="btn-sm" title="Điền mẫu Bạn đồng hành">Mẫu Bạn thân</button>
+              </div>
+            </div>
             <p class="muted" style="margin-top:0; font-size:0.84rem;">
-              Tùy chỉnh danh tính, cách xưng hô và thành phố thời tiết của trợ lý ngay trên Web Dashboard (không cần sửa <span class="mono">.env</span>).
+              Nhập tự do danh tính, vai trò, tính cách, văn phong và thông tin nền để AI nhập vai nhất quán ngay ở lượt chat tiếp theo (không cần sửa <span class="mono">.env</span>).
             </p>
             <form id="personaForm">
-              <div class="field">
-                <label for="inpButlerName">Tên AI / Quản gia</label>
-                <input id="inpButlerName" placeholder="vd: Jarvis, Nova, Quản gia..." required />
-              </div>
-              <div class="field">
-                <label for="inpOwnerName">Tên / Cách gọi Chủ nhà</label>
-                <input id="inpOwnerName" placeholder="vd: Chủ nhà, Bạn, Minh..." required />
-              </div>
-              <div class="field">
-                <label for="inpButlerStyle">Phong cách giao tiếp</label>
-                <select id="inpButlerStyle">
-                  <option value="butler">Quản gia điềm đạm (butler)</option>
-                  <option value="assistant">Trợ lý chuyên nghiệp (assistant)</option>
-                  <option value="companion">Bạn đồng hành thân thiện (companion)</option>
-                </select>
+              <div class="grid grid-2" style="gap:10px; margin-bottom:8px;">
+                <div class="field" style="margin-bottom:0;">
+                  <label for="inpButlerName">Tên AI / Nhân vật</label>
+                  <input id="inpButlerName" style="width:100%;" placeholder="vd: Atlas, Nova, Jarvis..." required />
+                </div>
+                <div class="field" style="margin-bottom:0;">
+                  <label for="inpSelfPronoun">Cách AI tự xưng (tùy chọn)</label>
+                  <input id="inpSelfPronoun" style="width:100%;" placeholder="vd: mình, tớ, em, tôi (trống = theo mẫu)" />
+                </div>
+                <div class="field" style="margin-bottom:0;">
+                  <label for="inpOwnerName">Tên / Cách gọi Chủ nhà</label>
+                  <input id="inpOwnerName" style="width:100%;" placeholder="vd: Chủ nhà, bạn, anh, Minh..." required />
+                </div>
+                <div class="field" style="margin-bottom:0;">
+                  <label for="inpButlerStyle">Phong cách nền</label>
+                  <select id="inpButlerStyle" style="width:100%;">
+                    <option value="butler">Quản gia điềm đạm (butler)</option>
+                    <option value="assistant">Trợ lý chuyên nghiệp (assistant)</option>
+                    <option value="companion">Bạn đồng hành thân thiện (companion)</option>
+                  </select>
+                </div>
               </div>
               <div class="field">
                 <label for="inpWeatherCity">Thành phố xem thời tiết</label>
-                <input id="inpWeatherCity" placeholder="vd: Ho Chi Minh, Hanoi, Da Nang..." />
+                <input id="inpWeatherCity" style="width:100%;" placeholder="vd: Ho_Chi_Minh_City, Hanoi, Da_Nang..." />
               </div>
               <div class="field">
-                <label for="inpCustomNotes">Ghi chú phong cách riêng (tùy chọn)</label>
-                <input id="inpCustomNotes" placeholder="vd: Luôn trả lời ngắn gọn, ưu tiên kiểm tra cảm biến phòng trước..." />
+                <label for="inpAiBio">Thông tin &amp; Hồ sơ nhân vật AI (tuổi, vai trò, chuyên môn, bối cảnh, sở thích)</label>
+                <textarea id="inpAiBio" rows="3" style="width:100%; resize:vertical;" maxlength="1500" placeholder="vd: Trợ lý 24 tuổi am hiểu công nghệ, yêu thích nhạc Lo-fi/Indie, trực Smart Home tại phòng..."></textarea>
+              </div>
+              <div class="field">
+                <label for="inpAiPersonality">Tính cách &amp; Thái độ ứng xử (nét tính cách, mức độ hóm hỉnh, cách quan tâm)</label>
+                <textarea id="inpAiPersonality" rows="3" style="width:100%; resize:vertical;" maxlength="1500" placeholder="vd: Điềm tĩnh, tinh tế, thỉnh thoảng trêu nhẹ thân thiện nhưng luôn lắng nghe và xử lý nhanh gọn..."></textarea>
+              </div>
+              <div class="field">
+                <label for="inpSpeakingStyle">Văn phong &amp; Khẩu ngữ riêng (cách mở câu, từ hay dùng / từ cần tránh)</label>
+                <textarea id="inpSpeakingStyle" rows="2" style="width:100%; resize:vertical;" maxlength="1000" placeholder="vd: Nhắn ngắn 1–2 câu tự nhiên như đời thực, tránh rập khuôn văn mẫu..."></textarea>
+              </div>
+              <div class="field">
+                <label for="inpOwnerBio">Thông tin nền cố định về Chủ nhà (công việc, lịch sinh hoạt, gu/thói quen)</label>
+                <textarea id="inpOwnerBio" rows="2" style="width:100%; resize:vertical;" maxlength="1000" placeholder="vd: Kỹ sư phần mềm, hay làm việc khuya, thích nghe nhạc Indie khi code, cần nhắc uống nước..."></textarea>
+              </div>
+              <div class="field">
+                <label for="inpCustomNotes">Ghi chú &amp; Quy tắc bổ sung (tùy chọn)</label>
+                <textarea id="inpCustomNotes" rows="2" style="width:100%; resize:vertical;" maxlength="1500" placeholder="vd: Luôn kiểm tra cảm biến trước khi bật quạt, ưu tiên báo ngắn gọn..."></textarea>
               </div>
               <div class="row between" style="margin-top:12px;">
-                <span class="muted" style="font-size:0.78rem;">Áp dụng tức thì cho lượt chat tiếp theo</span>
-                <button type="submit" class="btn-pink">Lưu Persona</button>
+                <span class="muted" style="font-size:0.78rem;">Áp dụng tức thì cho Pass 1, Pass 2 &amp; Nhịp chủ động</span>
+                <button type="submit" class="btn-primary">💾 Lưu Hồ sơ &amp; Tính cách</button>
               </div>
             </form>
+            <details class="cfg-drawer" style="margin-top:12px;">
+              <summary>
+                <span>👁️ Xem trước System Prompt đã biên dịch</span>
+                <span class="muted" style="font-size:0.78rem;">Bản gửi Gemini</span>
+              </summary>
+              <div class="drawer-body">
+                <pre id="personaPromptPreview" class="mono" style="white-space:pre-wrap; word-break:break-word; margin:0; font-size:0.79rem; color:#cbd5e1;"></pre>
+              </div>
+            </details>
           </div>
 
           <div class="card">
@@ -2194,12 +2233,57 @@
 
     function syncPersonaForm(ps) {
       if (!ps) return;
-      if ($("inpButlerName")) $("inpButlerName").value = ps.butler_name || "Smart Butler";
+      if ($("inpButlerName")) $("inpButlerName").value = ps.butler_name || "Atlas";
+      if ($("inpSelfPronoun")) $("inpSelfPronoun").value = ps.self_pronoun || "";
       if ($("inpOwnerName")) $("inpOwnerName").value = ps.owner_name || "Chủ nhà";
       if ($("inpButlerStyle")) $("inpButlerStyle").value = ps.style || "butler";
-      if ($("inpWeatherCity")) $("inpWeatherCity").value = ps.weather_city || "Ho Chi Minh";
+      if ($("inpWeatherCity")) $("inpWeatherCity").value = ps.weather_city || "Ho_Chi_Minh_City";
+      if ($("inpAiBio")) $("inpAiBio").value = ps.ai_bio || "";
+      if ($("inpAiPersonality")) $("inpAiPersonality").value = ps.ai_personality || "";
+      if ($("inpSpeakingStyle")) $("inpSpeakingStyle").value = ps.speaking_style || "";
+      if ($("inpOwnerBio")) $("inpOwnerBio").value = ps.owner_bio || "";
       if ($("inpCustomNotes")) $("inpCustomNotes").value = ps.custom_notes || "";
+      if ($("personaPromptPreview")) $("personaPromptPreview").textContent = ps.prompt_preview || "(Chưa có dữ liệu)";
       if ($("hdrBrandTitle")) $("hdrBrandTitle").textContent = `🏠 ${ps.butler_name || "Smart Butler"} • Home Hub`;
+    }
+
+    const _PERSONA_TEMPLATES = {
+      butler: {
+        butler_name: "Atlas",
+        self_pronoun: "mình",
+        style: "butler",
+        ai_bio: "Quản gia công nghệ 24/7 tại phòng, theo dõi thiết bị LAN, cảm biến phòng và lịch sinh hoạt.",
+        ai_personality: "Điềm tĩnh, tinh tế, chu đáo, nhắc vừa đủ một lần rồi thôi, biết quan tâm đúng lúc.",
+        speaking_style: "Lịch thiệp, ngắn gọn, ấm áp; tránh lặp lại câu cũ hoặc văn mẫu sáo rỗng.",
+      },
+      assistant: {
+        butler_name: "Nova",
+        self_pronoun: "trợ lý",
+        style: "assistant",
+        ai_bio: "Trợ lý kỹ thuật & điều phối không gian làm việc, ưu tiên số liệu thực tế và tự động hóa chính xác.",
+        ai_personality: "Rõ ràng, chuyên nghiệp, thẳng thắn, tập trung giải pháp nhanh.",
+        speaking_style: "Súc tích 1–2 câu, đi thẳng trọng tâm, báo đúng thông số.",
+      },
+      companion: {
+        butler_name: "Mina",
+        self_pronoun: "tớ",
+        style: "companion",
+        ai_bio: "Bạn đồng hành 22 tuổi yêu thích âm nhạc Indie/Lo-fi, thiết kế và chăm chút góc phòng gọn gàng.",
+        ai_personality: "Thân thiện, vui tính, biết cà khịa nhẹ đúng lúc nhưng luôn ấm áp và tinh ý.",
+        speaking_style: "Tự nhiên như nhắn tin ngoài đời, câu ngắn nhịp nhàng, không sến.",
+      },
+    };
+
+    function applyPersonaTemplate(key) {
+      const tpl = _PERSONA_TEMPLATES[key];
+      if (!tpl) return;
+      if ($("inpButlerName")) $("inpButlerName").value = tpl.butler_name;
+      if ($("inpSelfPronoun")) $("inpSelfPronoun").value = tpl.self_pronoun;
+      if ($("inpButlerStyle")) $("inpButlerStyle").value = tpl.style;
+      if ($("inpAiBio")) $("inpAiBio").value = tpl.ai_bio;
+      if ($("inpAiPersonality")) $("inpAiPersonality").value = tpl.ai_personality;
+      if ($("inpSpeakingStyle")) $("inpSpeakingStyle").value = tpl.speaking_style;
+      showToast("Đã điền mẫu", "Hãy chỉnh sửa theo ý muốn và bấm Lưu Hồ sơ & Tính cách.");
     }
 
     function syncProfileForm(p) {
@@ -2678,6 +2762,15 @@
     [["inpAffinity", "valAffinity"], ["inpTease", "valTease"], ["inpStubborn", "valStubborn"], ["inpClingy", "valClingy"]]
       .forEach(([inp, val]) => $(inp).addEventListener("input", () => $(val).textContent = $(inp).value));
 
+    $("btnJumpPersonaTab")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      document.querySelector('.tab-btn[data-tab="profile"]')?.click();
+      $("personaForm")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    $("btnTplButler")?.addEventListener("click", () => applyPersonaTemplate("butler"));
+    $("btnTplAssistant")?.addEventListener("click", () => applyPersonaTemplate("assistant"));
+    $("btnTplCompanion")?.addEventListener("click", () => applyPersonaTemplate("companion"));
+
     $("personaForm")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       try {
@@ -2685,15 +2778,20 @@
           method: "PATCH",
           body: JSON.stringify({
             butler_name: $("inpButlerName").value.trim(),
+            self_pronoun: $("inpSelfPronoun").value.trim(),
             owner_name: $("inpOwnerName").value.trim(),
             style: $("inpButlerStyle").value,
             weather_city: $("inpWeatherCity").value.trim(),
+            ai_bio: $("inpAiBio").value.trim(),
+            ai_personality: $("inpAiPersonality").value.trim(),
+            speaking_style: $("inpSpeakingStyle").value.trim(),
+            owner_bio: $("inpOwnerBio").value.trim(),
             custom_notes: $("inpCustomNotes").value.trim(),
           }),
         });
         if (state.overview) state.overview.persona = updated;
         syncPersonaForm(updated);
-        showToast("Đã lưu Persona", `${updated.butler_name} (${updated.style_label})`);
+        showToast("Đã lưu Hồ sơ & Tính cách AI", `${updated.butler_name} (${updated.self_ref} • ${updated.style_label})`);
       } catch (err) { showToast("Lỗi lưu Persona", err.message, "error"); }
     });
 
