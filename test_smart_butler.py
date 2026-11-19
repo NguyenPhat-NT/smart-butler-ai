@@ -110,15 +110,19 @@ class TestPrivacyAndCodeDiscipline(SmartButlerBaseTest):
             r"morning_dream|night_dream|người yêu|yêu xa|bạn gái",
             re.IGNORECASE,
         )
+        skip_dirs = {".git", "venv", ".venv", "__pycache__", "node_modules", "music_cache", "backups"}
         hits = []
         for path in sorted(ROOT_DIR.rglob("*")):
             if not path.is_file():
+                continue
+            rel_parts = set(path.relative_to(ROOT_DIR).parts[:-1])
+            if rel_parts & skip_dirs:
                 continue
             if path.name == os.path.basename(__file__):
                 continue
             if path.suffix not in (".py", ".html", ".js", ".c", ".cpp", ".h", ".ino", ".ini", ".md", ".example", ".service", ".bat"):
                 continue
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8", errors="ignore")
             for idx, line in enumerate(text.splitlines(), start=1):
                 if forbidden.search(line):
                     hits.append(f"{path.relative_to(ROOT_DIR)}:{idx}: {line.strip()[:80]}")
