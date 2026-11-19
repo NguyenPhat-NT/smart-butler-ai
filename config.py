@@ -42,6 +42,31 @@ def get_api_keys(role: str = "chat") -> list:
     return list(GEMINI_API_KEYS)
 
 
+# OpenRouter API (tùy chọn: dự phòng tự động bằng model :free khi toàn bộ Google Gemini gặp 503/429/timeout)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+_raw_or_keys = os.getenv("OPENROUTER_API_KEYS", "")
+OPENROUTER_API_KEYS = [k.strip() for k in _raw_or_keys.split(",") if k.strip()]
+if OPENROUTER_API_KEY and OPENROUTER_API_KEY not in OPENROUTER_API_KEYS:
+    OPENROUTER_API_KEYS.insert(0, OPENROUTER_API_KEY)
+if OPENROUTER_API_KEYS and not OPENROUTER_API_KEY:
+    OPENROUTER_API_KEY = OPENROUTER_API_KEYS[0]
+
+_DEFAULT_OPENROUTER_MODELS = (
+    "google/gemma-4-31b-it:free,"
+    "baidu/ernie-5.5-flash-preview:free,"
+    "google/gemma-4-26b-a4b-it:free,"
+    "openrouter/free"
+)
+OPENROUTER_MODELS = [
+    m.strip() for m in os.getenv("OPENROUTER_MODELS", _DEFAULT_OPENROUTER_MODELS).split(",") if m.strip()
+]
+
+
+def get_openrouter_api_keys() -> list:
+    """Trả về danh sách OpenRouter API key dự phòng đã cấu hình."""
+    return list(OPENROUTER_API_KEYS)
+
+
 # Đường dẫn Database SQLite
 DB_PATH = os.getenv("DB_PATH", "smart_butler.db")
 

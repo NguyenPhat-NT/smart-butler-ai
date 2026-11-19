@@ -811,6 +811,90 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
         self.assertIn("gemini-3-flash-preview", called_urls[1])
         self.assertIn("gemini-3-flash-preview", called_urls[2])
 
+    async def test_openrouter_fallback_when_all_gemini_503_and_disabled_for_audit(self):
+        msgs = gemini_client._convert_gemini_contents_to_openai_messages(
+            "System prompt",
+            [
+                {"role": "user", "parts": [{"text": "Xin chào"}]},
+                {"role": "model", "parts": [{"text": "Dạ"}]},
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": "Kiểm tra ảnh"},
+                        {"inline_data": {"mime_type": "image/jpeg", "data": "QUJD"}},
+                    ],
+                },
+            ],
+        )
+        self.assertEqual(msgs[0], {"role": "system", "content": "System prompt"})
+        self.assertEqual(msgs[2], {"role": "assistant", "content": "Dạ"})
+        self.assertEqual(msgs[3]["content"][1]["image_url"]["url"], "data:image/jpeg;base64,QUJD")
+
+        class FakeResp:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def text(self):
+                return self._body if isinstance(self._body, str) else json.dumps(self._body)
+
+            async def json(self):
+                return self._body
+
+        calls = []
+
+        class FakeSession:
+            def post(self, url, headers=None, json=None, **kwargs):
+                calls.append((url, headers or {}, json or {}))
+                if "openrouter.ai" in url:
+                    return FakeResp(
+                        200,
+                        {"model": "google/gemma-4-31b-it:free", "choices": [{"message": {"content": '{"messages": ["or_ok"]}'}}]},
+                    )
+                return FakeResp(503, "high demand")
+
+        gemini_client._MODEL_UNHEALTHY_UNTIL.clear()
+        gemini_client._KEY_COOLDOWN.clear()
+        gemini_client._OPENROUTER_COOLDOWN.clear()
+        try:
+            with (
+                patch.object(config, "GEMINI_API_KEYS", ["k1"]),
+                patch.object(gemini_client, "get_api_keys", return_value=["k1"]),
+                patch.object(config, "get_openrouter_api_keys", return_value=["or-dummy-key"]),
+                patch.object(config, "OPENROUTER_MODELS", ["google/gemma-4-31b-it:free"]),
+                patch.object(gemini_client, "get_session", return_value=FakeSession()),
+            ):
+                ok_txt = await gemini_client.call_gemini_api(
+                    model="gemini-3.1-flash-lite",
+                    fallback_models=["gemini-3.5-flash-lite"],
+                    system_instruction="sys",
+                    contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+                    response_json=True,
+                )
+                with self.assertRaises(RuntimeError):
+                    await gemini_client.call_gemini_api(
+                        model="gemini-3.1-flash-lite",
+                        fallback_models=[],
+                        system_instruction="sys",
+                        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+                        allow_external_fallback=False,
+                    )
+        finally:
+            gemini_client._MODEL_UNHEALTHY_UNTIL.clear()
+            gemini_client._OPENROUTER_COOLDOWN.clear()
+
+        self.assertEqual(ok_txt, '{"messages": ["or_ok"]}')
+        or_calls = [c for c in calls if "openrouter.ai" in c[0]]
+        self.assertEqual(len(or_calls), 1)
+        self.assertEqual(or_calls[0][1].get("Authorization"), "Bearer or-dummy-key")
+        self.assertEqual(or_calls[0][2].get("response_format"), {"type": "json_object"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta/files"
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 VN_TZ = datetime.timezone(datetime.timedelta(hours=getattr(config, "TIMEZONE_OFFSET_HOURS", 7)))
 
 # Ngân sách thời gian cho 1 lần gọi và cho toàn bộ chuỗi fallback.
@@ -71,9 +72,11 @@ QUOTA_COOLDOWN_DEFAULT_SEC = 30.0
 # - Dùng key_tail (8 ký tự cuối của key) để cooldown gắn đúng với project của từng key
 #   dù key_role='chat' và key_role='memory' sắp xếp thứ tự key khác nhau.
 _KEY_COOLDOWN: Dict[Tuple[str, str, str], float] = {}
+_OPENROUTER_COOLDOWN: Dict[Tuple[str, str], float] = {}
 _CHAT_RR_COUNTER = 0
 # Lưu tạm các model vừa trả HTTP 5xx (503 high demand) hoặc treo timeout để đẩy xuống cuối hàng đợi 60s
 _EMERGENCY_FALLBACK_MODELS = ("gemini-flash-lite-latest", "gemini-3-flash-preview")
+_OPENROUTER_RESERVE_SEC = 12.0
 _MODEL_UNHEALTHY_COOLDOWN_SEC = 60.0
 _MODEL_UNHEALTHY_UNTIL: Dict[str, float] = {}
 
@@ -190,6 +193,188 @@ def _build_candidate_models(
     ]
 
 
+def _convert_gemini_contents_to_openai_messages(
+    system_instruction: str,
+    contents: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Chuyển đổi payload system/contents của Gemini sang định dạng OpenAI Chat Completions cho OpenRouter."""
+    messages: List[Dict[str, Any]] = []
+    sys_text = str(system_instruction or "").strip()
+    if sys_text:
+        messages.append({"role": "system", "content": sys_text})
+
+    for item in contents or []:
+        if not isinstance(item, dict):
+            continue
+        raw_role = str(item.get("role") or "user").strip().lower()
+        role = "assistant" if raw_role == "model" else "user"
+        text_parts: List[str] = []
+        image_parts: List[Dict[str, Any]] = []
+        for part in item.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("text"):
+                text_parts.append(str(part["text"]))
+            else:
+                inline = part.get("inline_data") or part.get("inlineData")
+                if isinstance(inline, dict):
+                    mime = str(inline.get("mime_type") or inline.get("mimeType") or "").strip()
+                    b64 = str(inline.get("data") or "").strip()
+                    if mime.startswith("image/") and b64:
+                        image_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        joined_text = "\n".join(text_parts).strip()
+        if image_parts and role == "user":
+            content_blocks: List[Dict[str, Any]] = []
+            if joined_text:
+                content_blocks.append({"type": "text", "text": joined_text})
+            content_blocks.extend(image_parts)
+            messages.append({"role": role, "content": content_blocks})
+        elif joined_text:
+            messages.append({"role": role, "content": joined_text})
+    return messages
+
+
+def _extract_openrouter_text(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return ""
+    msg = choices[0].get("message") or {}
+    if not isinstance(msg, dict):
+        return ""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        chunks = [
+            str(blk.get("text") or "")
+            for blk in content
+            if isinstance(blk, dict) and blk.get("text")
+        ]
+        return "".join(chunks).strip()
+    return ""
+
+
+async def _call_openrouter_fallback(
+    *,
+    system_instruction: str,
+    contents: List[Dict[str, Any]],
+    response_json: bool,
+    temperature: float,
+    max_output_tokens: int,
+    deadline: float,
+    per_req_timeout: float,
+) -> Optional[str]:
+    """Gọi OpenRouter (:free models) làm phao dự phòng khi toàn bộ Google Gemini gặp sự cố/503."""
+    get_or_keys_fn = getattr(config, "get_openrouter_api_keys", None)
+    or_keys = list(get_or_keys_fn()) if callable(get_or_keys_fn) else list(getattr(config, "OPENROUTER_API_KEYS", []) or [])
+    if not or_keys:
+        return None
+    or_models_cfg = list(getattr(config, "OPENROUTER_MODELS", []) or [])
+    if not or_models_cfg:
+        or_models_cfg = [
+            "google/gemma-4-31b-it:free",
+            "baidu/ernie-5.5-flash-preview:free",
+            "google/gemma-4-26b-a4b-it:free",
+            "openrouter/free",
+        ]
+
+    now_mono = time.monotonic()
+    or_models = [
+        m_name
+        for _, m_name in sorted(
+            enumerate(or_models_cfg),
+            key=lambda item: (1 if _MODEL_UNHEALTHY_UNTIL.get(f"or:{item[1]}", 0.0) > now_mono else 0, item[0]),
+        )
+    ]
+    messages = _convert_gemini_contents_to_openai_messages(system_instruction, contents)
+    if not messages:
+        return None
+
+    for model_idx, or_model in enumerate(or_models):
+        has_more_models = (model_idx + 1) < len(or_models)
+        for key_idx, or_key in enumerate(or_keys):
+            remaining = deadline - time.monotonic()
+            if remaining <= 1.2:
+                return None
+            key_tail = or_key[-8:]
+            if _OPENROUTER_COOLDOWN.get((or_model, key_tail), 0.0) > time.monotonic():
+                continue
+            headers = {
+                "Authorization": f"Bearer {or_key}",
+                "Content-Type": "application/json",
+                "X-Title": "OpenStick-Assistant",
+            }
+            payload: Dict[str, Any] = {
+                "model": or_model,
+                "messages": messages,
+                "temperature": float(temperature),
+                "max_tokens": int(max_output_tokens),
+            }
+            if response_json and or_model != "openrouter/free":
+                payload["response_format"] = {"type": "json_object"}
+
+            attempt_started = time.monotonic()
+            try:
+                async with get_session().post(
+                    OPENROUTER_CHAT_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=min(max(per_req_timeout, 10.0), remaining), connect=6),
+                ) as resp:
+                    elapsed = time.monotonic() - attempt_started
+                    if resp.status == 200:
+                        data = await resp.json()
+                        text = _extract_openrouter_text(data)
+                        if text:
+                            _MODEL_UNHEALTHY_UNTIL.pop(f"or:{or_model}", None)
+                            used_model = str(data.get("model") or or_model)
+                            logger.info(
+                                f"🤖 OpenRouter Fallback [{used_model} | key#{key_idx + 1}] OK ({elapsed:.1f}s)"
+                            )
+                            return text
+                        _MODEL_UNHEALTHY_UNTIL[f"or:{or_model}"] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
+                        logger.warning(f"OpenRouter [{or_model}] trả về nội dung rỗng -> thử model khác")
+                        if has_more_models:
+                            break
+                        continue
+
+                    err_text = (await resp.text())[:250]
+                    logger.warning(
+                        f"OpenRouter [{or_model} | key#{key_idx + 1}] HTTP {resp.status} "
+                        f"sau {elapsed:.1f}s: {err_text[:180]}"
+                    )
+                    if resp.status == 429:
+                        low_err = err_text.lower()
+                        cd_sec = 600.0 if ("per-day" in low_err or "daily" in low_err) else 45.0
+                        _OPENROUTER_COOLDOWN[(or_model, key_tail)] = time.monotonic() + cd_sec
+                        _MODEL_UNHEALTHY_UNTIL[f"or:{or_model}"] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
+                        if "upstream" in low_err and has_more_models:
+                            break
+                        continue
+                    if resp.status in (400, 404, 422, 500, 502, 503, 504):
+                        _MODEL_UNHEALTHY_UNTIL[f"or:{or_model}"] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
+                        if has_more_models:
+                            break
+                        continue
+                    if resp.status in (401, 402, 403):
+                        _OPENROUTER_COOLDOWN[(or_model, key_tail)] = time.monotonic() + 300.0
+                        continue
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - attempt_started
+                logger.warning(f"OpenRouter [{or_model} | key#{key_idx + 1}] timeout sau {elapsed:.1f}s")
+                if elapsed >= 6.0:
+                    _MODEL_UNHEALTHY_UNTIL[f"or:{or_model}"] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
+                    if has_more_models:
+                        break
+            except Exception as e:
+                logger.warning(f"OpenRouter [{or_model} | key#{key_idx + 1}] lỗi: {type(e).__name__}: {e}")
+                if has_more_models:
+                    break
+    return None
+
+
 async def call_gemini_api(model: str, system_instruction: str, contents: List[Dict[str, Any]],
                           response_json: bool = True,
                           key_role: str = "chat",
@@ -200,11 +385,12 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
                           temperature: float = 0.70,
                           max_output_tokens: int = 2048,
                           total_deadline_sec: Optional[float] = None,
-                          allow_cooldown_wait: bool = True) -> str:
+                          allow_cooldown_wait: bool = True,
+                          allow_external_fallback: bool = True) -> str:
     """
     Gọi trực tiếp Gemini REST API qua aiohttp - Tối ưu cực đại cho RAM 400MB.
     Có deadline tổng 42s, timeout 10s/lần, fail-fast khi mất DNS/mạng cục bộ,
-    xoay vòng đa API Key, cân bằng tải luân phiên và né tạm thời model 503/timeout.
+    xoay vòng đa API Key, cân bằng tải luân phiên, né model 503/timeout và dự phòng OpenRouter (:free).
     """
     candidate_models = _build_candidate_models(model, key_role, fallback_models, tools)
 
@@ -214,7 +400,14 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
     if allowed_keys:
         filtered_keys = [k for k in api_keys if k in allowed_keys]
         api_keys = filtered_keys or list(allowed_keys)
-    if not api_keys:
+
+    get_or_keys_fn = getattr(config, "get_openrouter_api_keys", None)
+    has_external_fallback = bool(
+        allow_external_fallback
+        and not tools
+        and (list(get_or_keys_fn()) if callable(get_or_keys_fn) else getattr(config, "OPENROUTER_API_KEYS", None))
+    )
+    if not api_keys and not has_external_fallback:
         raise GeminiFatalError("Chưa cấu hình GEMINI_API_KEY / GEMINI_API_KEYS")
 
     payload = {
@@ -237,6 +430,7 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
     cooldown_scope = "grounding" if tools else "gen"
     deadline_budget = total_deadline_sec if total_deadline_sec is not None else TOTAL_DEADLINE_SEC
     deadline = time.monotonic() + max(1.0, float(deadline_budget))
+    gemini_deadline = deadline - (_OPENROUTER_RESERVE_SEC if (has_external_fallback and deadline_budget >= 20.0) else 0.0)
     started_at = time.monotonic()
     last_err: Optional[Exception] = None
     quota_hits = 0
@@ -245,126 +439,147 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
     connector_errors = 0
     abort_network = False
 
-    for attempt_round in range(2):
-        calls_made = 0
-        quota_hits = 0
-        pending_cooldowns: List[float] = []
+    if api_keys:
+        for attempt_round in range(2):
+            calls_made = 0
+            quota_hits = 0
+            pending_cooldowns: List[float] = []
 
-        for model_idx, cur_model in enumerate(candidate_models):
-            has_more_models = (model_idx + 1) < len(candidate_models)
-            for key_idx, api_key in enumerate(api_keys):
-                remaining = deadline - time.monotonic()
-                if remaining <= 1:
-                    break
-                key_tail = api_key[-8:]
-                now_mono = time.monotonic()
-                cooldown_until = _KEY_COOLDOWN.get((cur_model, key_tail, cooldown_scope), 0.0)
-                if cooldown_until > now_mono:
-                    pending_cooldowns.append(cooldown_until - now_mono)
-                    logger.debug(
-                        f"Bỏ qua Gemini [{cur_model} | key#{key_idx + 1} | {cooldown_scope}] — đang cooldown "
-                        f"{cooldown_until - now_mono:.0f}s sau lỗi 429"
-                    )
-                    continue
-                url = f"{GEMINI_BASE_URL}/{cur_model}:generateContent?key={api_key}"
-                attempt_started = time.monotonic()
-                calls_made += 1
-                try:
-                    async with get_session().post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(total=min(per_req_timeout, remaining), connect=6),
-                    ) as resp:
-                        elapsed = time.monotonic() - attempt_started
-                        if resp.status == 200:
-                            data = await resp.json()
-                            text = _extract_text(data)
-                            if text:
-                                _MODEL_UNHEALTHY_UNTIL.pop(cur_model, None)
-                                logger.info(
-                                    f"🤖 Gemini [{cur_model} | role={key_role} | key#{key_idx + 1}] OK ({elapsed:.1f}s)"
-                                )
-                                return text
-                            last_err = RuntimeError("Gemini trả về nội dung rỗng (bị chặn hoặc hết token)")
-                            continue
-                        err_text = (await resp.text())[:300]
-                        logger.warning(
-                            f"Gemini [{cur_model} | key#{key_idx + 1}] HTTP {resp.status} "
-                            f"sau {elapsed:.1f}s: {err_text[:200]}"
+            for model_idx, cur_model in enumerate(candidate_models):
+                has_more_models = (model_idx + 1) < len(candidate_models)
+                for key_idx, api_key in enumerate(api_keys):
+                    remaining = gemini_deadline - time.monotonic()
+                    if remaining <= 1:
+                        break
+                    key_tail = api_key[-8:]
+                    now_mono = time.monotonic()
+                    cooldown_until = _KEY_COOLDOWN.get((cur_model, key_tail, cooldown_scope), 0.0)
+                    if cooldown_until > now_mono:
+                        pending_cooldowns.append(cooldown_until - now_mono)
+                        logger.debug(
+                            f"Bỏ qua Gemini [{cur_model} | key#{key_idx + 1} | {cooldown_scope}] — đang cooldown "
+                            f"{cooldown_until - now_mono:.0f}s sau lỗi 429"
                         )
-                        if resp.status == 429:
-                            # Hạn mức: 15 RPM / project / model. Ghi nhớ cooldown theo đúng
-                            # bộ (model, key_tail, scope) để không bắn lại vào bucket vừa bị chặn.
-                            quota_hits += 1
-                            delay = _parse_retry_delay(err_text) or QUOTA_COOLDOWN_DEFAULT_SEC
-                            _KEY_COOLDOWN[(cur_model, key_tail, cooldown_scope)] = time.monotonic() + delay
-                            pending_cooldowns.append(delay)
-                            last_err = GeminiQuotaError(
-                                f"Hết hạn mức {cur_model} key#{key_idx + 1} ({cooldown_scope}, nghỉ {delay:.0f}s)"
+                        continue
+                    url = f"{GEMINI_BASE_URL}/{cur_model}:generateContent?key={api_key}"
+                    attempt_started = time.monotonic()
+                    calls_made += 1
+                    try:
+                        async with get_session().post(
+                            url,
+                            headers=headers,
+                            json=payload,
+                            timeout=aiohttp.ClientTimeout(total=min(per_req_timeout, remaining), connect=6),
+                        ) as resp:
+                            elapsed = time.monotonic() - attempt_started
+                            if resp.status == 200:
+                                data = await resp.json()
+                                text = _extract_text(data)
+                                if text:
+                                    _MODEL_UNHEALTHY_UNTIL.pop(cur_model, None)
+                                    logger.info(
+                                        f"🤖 Gemini [{cur_model} | role={key_role} | key#{key_idx + 1}] OK ({elapsed:.1f}s)"
+                                    )
+                                    return text
+                                last_err = RuntimeError("Gemini trả về nội dung rỗng (bị chặn hoặc hết token)")
+                                continue
+                            err_text = (await resp.text())[:300]
+                            logger.warning(
+                                f"Gemini [{cur_model} | key#{key_idx + 1}] HTTP {resp.status} "
+                                f"sau {elapsed:.1f}s: {err_text[:200]}"
                             )
-                            continue
-                        if resp.status in (500, 502, 503, 504):
-                            last_err = RuntimeError(f"HTTP {resp.status}: {err_text}")
+                            if resp.status == 429:
+                                # Hạn mức: 15 RPM / project / model. Ghi nhớ cooldown theo đúng
+                                # bộ (model, key_tail, scope) để không bắn lại vào bucket vừa bị chặn.
+                                quota_hits += 1
+                                delay = _parse_retry_delay(err_text) or QUOTA_COOLDOWN_DEFAULT_SEC
+                                _KEY_COOLDOWN[(cur_model, key_tail, cooldown_scope)] = time.monotonic() + delay
+                                pending_cooldowns.append(delay)
+                                last_err = GeminiQuotaError(
+                                    f"Hết hạn mức {cur_model} key#{key_idx + 1} ({cooldown_scope}, nghỉ {delay:.0f}s)"
+                                )
+                                continue
+                            if resp.status in (500, 502, 503, 504):
+                                last_err = RuntimeError(f"HTTP {resp.status}: {err_text}")
+                                _MODEL_UNHEALTHY_UNTIL[cur_model] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
+                                if has_more_models:
+                                    break  # Nghẽn server theo model -> sang model dự phòng ngay
+                                continue
+                            if resp.status in (403, 404) or (
+                                resp.status == 400 and ("api_key_invalid" in err_text.lower() or "api key" in err_text.lower())
+                            ):
+                                _KEY_COOLDOWN[(cur_model, key_tail, cooldown_scope)] = time.monotonic() + 300.0
+                                last_err = GeminiFatalError(f"Gemini API error code: {resp.status} - {err_text}")
+                                continue  # key lỗi hoặc model alias không hợp lệ -> thử key/model dự phòng
+                            raise GeminiFatalError(f"Gemini API error code: {resp.status} - {err_text}")
+                    except asyncio.TimeoutError as e:
+                        elapsed = time.monotonic() - attempt_started
+                        last_err = e
+                        logger.warning(
+                            f"Gemini [{cur_model} | key#{key_idx + 1}] timeout sau "
+                            f"{elapsed:.1f}s"
+                        )
+                        if elapsed >= 6.0:
                             _MODEL_UNHEALTHY_UNTIL[cur_model] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
                             if has_more_models:
-                                break  # Nghẽn server theo model -> sang model dự phòng ngay
-                            continue
-                        if resp.status in (403, 404) or (
-                            resp.status == 400 and ("api_key_invalid" in err_text.lower() or "api key" in err_text.lower())
-                        ):
-                            _KEY_COOLDOWN[(cur_model, key_tail, cooldown_scope)] = time.monotonic() + 300.0
-                            last_err = GeminiFatalError(f"Gemini API error code: {resp.status} - {err_text}")
-                            continue  # key lỗi hoặc model alias không hợp lệ -> thử key/model dự phòng
-                        raise GeminiFatalError(f"Gemini API error code: {resp.status} - {err_text}")
-                except asyncio.TimeoutError as e:
-                    elapsed = time.monotonic() - attempt_started
-                    last_err = e
-                    logger.warning(
-                        f"Gemini [{cur_model} | key#{key_idx + 1}] timeout sau "
-                        f"{elapsed:.1f}s"
-                    )
-                    if elapsed >= 6.0:
-                        _MODEL_UNHEALTHY_UNTIL[cur_model] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
-                        if has_more_models:
-                            break  # Model treo >6s -> chuyển sang model dự phòng ngay thay vì đốt key#2
-                except GeminiFatalError:
-                    raise
-                except (aiohttp.ClientConnectorError, socket.gaierror) as e:
-                    last_err = e
-                    connector_errors += 1
-                    logger.warning(
-                        f"Gemini [{cur_model} | key#{key_idx + 1}] lỗi mạng/DNS sau "
-                        f"{time.monotonic() - attempt_started:.1f}s: {type(e).__name__}: {e}"
-                    )
-                    if connector_errors >= 2:
-                        abort_network = True
-                        break
-                    if deadline - time.monotonic() > 3.0:
-                        await asyncio.sleep(0.8)
-                except Exception as e:
-                    last_err = e
-                    logger.warning(
-                        f"Gemini [{cur_model} | key#{key_idx + 1}] lỗi sau "
-                        f"{time.monotonic() - attempt_started:.1f}s: {type(e).__name__}: {e}"
-                    )
+                                break  # Model treo >6s -> chuyển sang model dự phòng ngay thay vì đốt key#2
+                    except GeminiFatalError:
+                        raise
+                    except (aiohttp.ClientConnectorError, socket.gaierror) as e:
+                        last_err = e
+                        connector_errors += 1
+                        logger.warning(
+                            f"Gemini [{cur_model} | key#{key_idx + 1}] lỗi mạng/DNS sau "
+                            f"{time.monotonic() - attempt_started:.1f}s: {type(e).__name__}: {e}"
+                        )
+                        if connector_errors >= 2:
+                            abort_network = True
+                            break
+                        if gemini_deadline - time.monotonic() > 3.0:
+                            await asyncio.sleep(0.8)
+                    except Exception as e:
+                        last_err = e
+                        logger.warning(
+                            f"Gemini [{cur_model} | key#{key_idx + 1}] lỗi sau "
+                            f"{time.monotonic() - attempt_started:.1f}s: {type(e).__name__}: {e}"
+                        )
 
-            if abort_network or (deadline - time.monotonic() <= 1):
+                if abort_network or (gemini_deadline - time.monotonic() <= 1):
+                    break
+
+            if abort_network:
                 break
 
-        if abort_network:
+            # Không gọi được lần nào vì mọi tổ hợp đang cooldown -> chờ cái sớm nhất (tối đa 12s) rồi thử lại
+            # (Bỏ qua ngủ chờ nếu đang gọi grounding tools hoặc còn OpenRouter fallback để không bỏ lỡ deadline)
+            if calls_made == 0 and pending_cooldowns:
+                wait_s = min(pending_cooldowns)
+                min_cooldown_wait = wait_s
+                if (
+                    allow_cooldown_wait
+                    and not tools
+                    and not has_external_fallback
+                    and attempt_round == 0
+                    and wait_s <= 12.0
+                    and (gemini_deadline - time.monotonic()) > wait_s + 3
+                ):
+                    logger.info(f"Tất cả key đang cooldown sau 429 — chờ {wait_s:.0f}s rồi thử lại.")
+                    await asyncio.sleep(wait_s + 0.5)
+                    continue
             break
 
-        # Không gọi được lần nào vì mọi tổ hợp đang cooldown -> chờ cái sớm nhất (tối đa 12s) rồi thử lại
-        # (Bỏ qua ngủ chờ nếu đang gọi grounding tools để rơi ngay về fallback RSS)
-        if calls_made == 0 and pending_cooldowns:
-            wait_s = min(pending_cooldowns)
-            min_cooldown_wait = wait_s
-            if allow_cooldown_wait and not tools and attempt_round == 0 and wait_s <= 12.0 and (deadline - time.monotonic()) > wait_s + 3:
-                logger.info(f"Tất cả key đang cooldown sau 429 — chờ {wait_s:.0f}s rồi thử lại.")
-                await asyncio.sleep(wait_s + 0.5)
-                continue
-        break
+    if has_external_fallback and not abort_network and (deadline - time.monotonic()) > 2.0:
+        or_text = await _call_openrouter_fallback(
+            system_instruction=system_instruction,
+            contents=contents,
+            response_json=response_json,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            deadline=deadline,
+            per_req_timeout=per_req_timeout,
+        )
+        if or_text:
+            return or_text
 
     total = time.monotonic() - started_at
     if quota_hits and quota_hits >= calls_made:
@@ -2205,6 +2420,7 @@ BẢN NHÁP {butler_name.upper()} SẮP GỬI (CHỈ ĐÁNH GIÁ LOGIC, KHÔNG T
             timeout_sec=min(4.5, budget_sec),
             total_deadline_sec=budget_sec,
             allow_cooldown_wait=False,
+            allow_external_fallback=False,
             temperature=0.1,
             max_output_tokens=512,
         )
@@ -2882,6 +3098,9 @@ def get_api_quota_status() -> Dict[str, Any]:
         else:
             _KEY_COOLDOWN.pop((model, key_tail, scope), None)
 
+    or_keys_fn = getattr(config, "get_openrouter_api_keys", None)
+    or_keys = list(or_keys_fn()) if callable(or_keys_fn) else list(getattr(config, "OPENROUTER_API_KEYS", []) or [])
+    or_models = list(getattr(config, "OPENROUTER_MODELS", []) or [])
     return {
         "chat_model": CHAT_MODEL,
         "memory_model": MEMORY_MODEL,
@@ -2889,4 +3108,7 @@ def get_api_quota_status() -> Dict[str, Any]:
         "key_count": len(keys),
         "keys_masked": [f"...{k[-6:]}" for k in keys],
         "active_cooldowns": cooldowns,
+        "openrouter_configured": bool(or_keys),
+        "openrouter_key_count": len(or_keys),
+        "openrouter_models": or_models,
     }
