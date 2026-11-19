@@ -5,8 +5,11 @@ Smart LAN Presence (OpenStick wlan0):
 - Phân giải động IP mới của PC cho VieNeu-TTS khi router DHCP đổi IP.
 - Giữ gọn ngữ cảnh phản hồi (chỉ tối ưu nhịp scheduler & kiểm tra TTS ngầm, không tự ý lộ thông số kỹ thuật LAN).
 """
+import os
 import re
 import time
+import socket
+import struct
 import asyncio
 import datetime
 import ipaddress
@@ -122,10 +125,14 @@ async def _run_cmd(*args: str, timeout: float = 3.0) -> str:
     """Chạy lệnh hệ thống bất đồng bộ không làm block event loop."""
     proc = None
     try:
+        env = dict(os.environ)
+        std_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        env["PATH"] = f"{std_path}:{env['PATH']}" if env.get("PATH") else std_path
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env=env,
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return out.decode("utf-8", errors="replace")
@@ -139,6 +146,142 @@ async def _run_cmd(*args: str, timeout: float = 3.0) -> str:
         return ""
     except Exception:
         return ""
+
+
+def parse_proc_net_arp(output: str, filter_iface: str = "") -> List[Dict[str, str]]:
+    """Phân tích `/proc/net/arp` làm fallback khi thiếu `ip neigh`."""
+    entries: List[Dict[str, str]] = []
+    seen = set()
+    for line in (output or "").splitlines():
+        parts = line.split()
+        if len(parts) < 6 or parts[0].lower() == "ip":
+            continue
+        ip_addr = parts[0].strip()
+        flags = parts[2].strip().lower()
+        mac = normalize_mac(parts[3])
+        dev = parts[5].strip()
+        if not _is_ipv4(ip_addr) or not mac or flags == "0x0":
+            continue
+        if filter_iface and dev and dev != filter_iface:
+            continue
+        key = (ip_addr, mac)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append({
+            "ip": ip_addr,
+            "dev": dev,
+            "mac": mac,
+            "state": "REACHABLE",
+        })
+    return entries
+
+
+_ARP_AN_RE = re.compile(r"\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:.-]+)\b.*\bon\s+(\S+)")
+
+
+def _parse_arp_an(output: str, filter_iface: str = "") -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    seen = set()
+    for line in (output or "").splitlines():
+        m = _ARP_AN_RE.search(line)
+        if not m:
+            continue
+        ip_addr = m.group(1)
+        mac = normalize_mac(m.group(2))
+        dev = m.group(3).strip()
+        if not _is_ipv4(ip_addr) or not mac:
+            continue
+        if filter_iface and dev and dev != filter_iface:
+            continue
+        key = (ip_addr, mac)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append({
+            "ip": ip_addr,
+            "dev": dev,
+            "mac": mac,
+            "state": "REACHABLE",
+        })
+    return entries
+
+
+def _read_proc_default_route(
+    preferred_iface: str = "wlan0",
+    route_text: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Đọc `(iface, gateway_ip)` default route từ `/proc/net/route` khi thiếu `ip route`."""
+    text = route_text
+    if text is None:
+        try:
+            with open("/proc/net/route", "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+        except OSError:
+            return "", ""
+
+    candidates: List[Tuple[str, str]] = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 3 or parts[1] != "00000000":
+            continue
+        iface = parts[0].strip()
+        gw_hex = parts[2].strip()
+        if len(gw_hex) != 8 or gw_hex == "00000000":
+            continue
+        try:
+            gw_ip = socket.inet_ntoa(struct.pack("<I", int(gw_hex, 16)))
+        except Exception:
+            continue
+        if _is_ipv4(gw_ip) and gw_ip != "0.0.0.0":
+            candidates.append((iface, gw_ip))
+
+    if not candidates:
+        return "", ""
+    for iface, gw_ip in candidates:
+        if iface == preferred_iface:
+            return iface, gw_ip
+    return candidates[0]
+
+
+async def _collect_neighbor_entries(iface: str = "", target_ip: str = "") -> List[Dict[str, str]]:
+    """Thu thập bảng ARP từ `ip neigh` kết hợp `/proc/net/arp` (và `arp -an` dự phòng)."""
+    merged: List[Dict[str, str]] = []
+    seen = set()
+
+    def _add_rows(rows: List[Dict[str, str]]) -> None:
+        for r in rows:
+            if target_ip and r.get("ip") != target_ip:
+                continue
+            key = (r.get("ip", ""), r.get("mac", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+
+    if target_ip:
+        neigh_out = await _run_cmd("ip", "neigh", "show", target_ip, timeout=2.5)
+    elif iface:
+        neigh_out = await _run_cmd("ip", "neigh", "show", "dev", iface, timeout=2.5)
+        if not neigh_out:
+            neigh_out = await _run_cmd("ip", "neigh", "show", timeout=2.5)
+    else:
+        neigh_out = await _run_cmd("ip", "neigh", "show", timeout=2.5)
+    _add_rows(parse_ip_neigh(neigh_out))
+
+    proc_arp = ""
+    try:
+        with open("/proc/net/arp", "r", encoding="utf-8", errors="ignore") as f:
+            proc_arp = f.read()
+    except OSError:
+        proc_arp = ""
+    _add_rows(parse_proc_net_arp(proc_arp, filter_iface=iface if not target_ip else ""))
+
+    if not merged:
+        arp_out = await _run_cmd("arp", "-an", timeout=2.5)
+        _add_rows(_parse_arp_an(arp_out, filter_iface=iface if not target_ip else ""))
+
+    return merged
 
 
 async def _ping_one(ip_addr: str, timeout_sec: int = 1) -> bool:
@@ -257,8 +400,11 @@ def is_quiet_hours_now(
     return vn_hour >= q_start or vn_hour < q_end
 
 
+_IFCONFIG_INET_RE = re.compile(r"\binet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)\b")
+
+
 async def get_local_network_info(preferred_iface: str = "wlan0") -> Dict[str, str]:
-    """Lấy interface, IP nội bộ và Gateway hiện tại của OpenStick."""
+    """Lấy interface, IP nội bộ và Gateway hiện tại của OpenStick (hỗ trợ fallback `/proc` & `ifconfig`)."""
     route_out = await _run_cmd("ip", "-4", "route", "show", "default", timeout=2.5)
     gw_ip = ""
     iface = preferred_iface
@@ -275,6 +421,13 @@ async def get_local_network_info(preferred_iface: str = "wlan0") -> Dict[str, st
         if gw_ip:
             break
 
+    if not gw_ip:
+        proc_iface, proc_gw = _read_proc_default_route(preferred_iface)
+        if proc_gw:
+            gw_ip = proc_gw
+            if proc_iface:
+                iface = proc_iface
+
     addr_out = await _run_cmd("ip", "-4", "-o", "addr", "show", "dev", iface, timeout=2.5)
     local_ip = ""
     prefix_len = 24
@@ -282,6 +435,28 @@ async def get_local_network_info(preferred_iface: str = "wlan0") -> Dict[str, st
     if m:
         local_ip = m.group(1)
         prefix_len = int(m.group(2))
+
+    if not local_ip:
+        ifc_out = await _run_cmd("ifconfig", iface, timeout=2.5)
+        m_ifc = _IFCONFIG_INET_RE.search(ifc_out)
+        if m_ifc and _is_ipv4(m_ifc.group(1)):
+            local_ip = m_ifc.group(1)
+
+    if not local_ip:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(0.5)
+            sock.connect((gw_ip or "8.8.8.8", 80))
+            sock_ip = sock.getsockname()[0]
+            sock.close()
+            if _is_ipv4(sock_ip) and not sock_ip.startswith("127."):
+                local_ip = sock_ip
+        except Exception:
+            pass
+
+    if not gw_ip and _is_ipv4(local_ip):
+        gw_ip = ".".join(local_ip.split(".")[:3]) + ".1"
+
     return {
         "iface": iface,
         "local_ip": local_ip,
@@ -416,10 +591,7 @@ async def scan_lan_devices(probe_subnet: bool = True) -> List[Dict[str, Any]]:
             except Exception as e:
                 logger.debug(f"Quét subnet bỏ qua: {e}")
 
-        neigh_out = await _run_cmd("ip", "neigh", "show", "dev", iface, timeout=2.5)
-        if not neigh_out:
-            neigh_out = await _run_cmd("ip", "neigh", "show", timeout=2.5)
-        entries = parse_ip_neigh(neigh_out)
+        entries = await _collect_neighbor_entries(iface=iface)
         hints = _read_local_host_hints()
         settings = get_lan_settings()
         phone_mac = settings["phone_mac"]
@@ -596,8 +768,7 @@ async def _refresh_presence_once_impl(target_user_id: int = 0) -> Dict[str, Any]
     _STATE["local_ip"] = net["local_ip"]
     _STATE["gateway_ip"] = net["gateway_ip"]
 
-    neigh_out = await _run_cmd("ip", "neigh", "show", "dev", iface, timeout=2.5)
-    entries = parse_ip_neigh(neigh_out)
+    entries = await _collect_neighbor_entries(iface=iface)
     by_mac = {e["mac"]: e for e in entries}
 
     async def _check_target(mac: str, last_ip: str, tcp_ports: Optional[List[int]] = None) -> Tuple[bool, str]:
@@ -621,8 +792,8 @@ async def _refresh_presence_once_impl(target_user_id: int = 0) -> Dict[str, Any]
                 else await _ping_one(last_ip, timeout_sec=1)
             )
             if reached:
-                # Đọc lại ip neigh để khớp đúng MAC trên IP đó
-                refreshed = parse_ip_neigh(await _run_cmd("ip", "neigh", "show", last_ip, timeout=2.0))
+                # Đọc lại bảng ARP để khớp đúng MAC trên IP đó
+                refreshed = await _collect_neighbor_entries(target_ip=last_ip)
                 if any(r["mac"] == mac for r in refreshed):
                     return True, last_ip
         return False, last_ip

@@ -70,6 +70,7 @@ import sampling_helper
 import trend_helper
 import smart_plugs
 import fan_controller
+import lan_presence
 import router_controller
 import esp32_audio
 import mcp_tools
@@ -641,6 +642,27 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
                     self.assertTrue(pong["live"])
                     await ws.send_json({"type": "stop"})
                 self.assertFalse(mgr.live_stream_active)
+
+    def test_lan_presence_proc_fallbacks(self):
+        proc_arp = (
+            "IP address       HW type     Flags       HW address            Mask     Device\n"
+            "192.168.1.1      0x1         0x2         50:64:2b:18:4f:cc     *        wlan0\n"
+            "192.168.1.99     0x1         0x0         00:00:00:00:00:00     *        wlan0\n"
+            "192.168.1.20     0x1         0x2         aa:bb:cc:dd:ee:20     *        usb0\n"
+        )
+        rows_wlan = lan_presence.parse_proc_net_arp(proc_arp, filter_iface="wlan0")
+        self.assertEqual(len(rows_wlan), 1)
+        self.assertEqual(rows_wlan[0]["ip"], "192.168.1.1")
+        self.assertEqual(rows_wlan[0]["mac"], "50:64:2b:18:4f:cc")
+
+        proc_route = (
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n"
+            "wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n"
+            "wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0\n"
+        )
+        iface, gw = lan_presence._read_proc_default_route("wlan0", route_text=proc_route)
+        self.assertEqual(iface, "wlan0")
+        self.assertEqual(gw, "192.168.1.1")
 
 
 if __name__ == "__main__":
