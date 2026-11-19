@@ -84,6 +84,14 @@ def format_vn_duration(seconds: float) -> str:
     return f"{hrs} giờ {mins} phút" if mins else f"{hrs} giờ"
 
 
+def format_absolute_vn_ts(ts_val: Any) -> str:
+    """Định dạng mốc giờ VN cố định ([dd/mm HH:MM]) để không làm vỡ prefix cache khi qua 0h."""
+    parsed = parse_ts_float(ts_val)
+    if not parsed:
+        return ""
+    return datetime.datetime.fromtimestamp(parsed, tz=VN_TZ).strftime("%d/%m %H:%M")
+
+
 def format_relative_vn_ts(ts_val: Any, now_ts: Optional[float] = None) -> str:
     parsed = parse_ts_float(ts_val)
     if not parsed:

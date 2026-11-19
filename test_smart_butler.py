@@ -921,6 +921,83 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
         self.assertIn("image_url", json.dumps(ds_calls[0][2]))
         self.assertNotIn("image_url", json.dumps(ds_calls[1][2]))
 
+    async def test_prompt_prefix_cache_stability_and_batch_history_window(self):
+        import datetime
+
+        tz = datetime.timezone(datetime.timedelta(hours=7))
+        t_2355 = datetime.datetime(2026, 11, 19, 23, 55, tzinfo=tz).timestamp()
+        t_0005 = datetime.datetime(2026, 11, 20, 0, 5, tzinfo=tz).timestamp()
+        ctx1 = diary_helper.get_vietnam_time_context(last_user_time=t_2355 - 120, now_ts=t_2355)
+        ctx2 = diary_helper.get_vietnam_time_context(last_user_time=t_0005 - 60, now_ts=t_0005)
+
+        s1, d1 = character_bible.build_pass1_prompt_parts(
+            affinity_score=65,
+            mood="sẵn sàng",
+            known_facts=["Chủ nhà thích nhạc Lofi"],
+            daily_trends="Trời mát 22 độ",
+            time_context=ctx1,
+            has_media=False,
+            now_playing_text="Loa phát Lofi",
+        )
+        s2, d2 = character_bible.build_pass1_prompt_parts(
+            affinity_score=85,
+            mood="tập trung",
+            known_facts=["Vừa tắt đèn"],
+            daily_trends="Mưa nhẹ",
+            time_context=ctx2,
+            has_media=True,
+            now_playing_text="Loa tắt",
+        )
+        self.assertEqual(s1, s2)
+        self.assertGreater(len(s1), 5000)
+        self.assertNotEqual(d1, d2)
+        self.assertIn("23:55", d1)
+        self.assertIn("00:05", d2)
+        self.assertIn("ĐỌC HIỂU HÌNH ẢNH", d2)
+
+        p2_1 = character_bible.build_pass2_system_instruction(time_context=ctx1)
+        p2_2 = character_bible.build_pass2_system_instruction(time_context=ctx2)
+        split_idx = p2_1.rindex("ĐỒNG HỒ THỰC TẾ")
+        self.assertEqual(p2_1[:split_idx], p2_2[:split_idx])
+        self.assertGreater(split_idx / len(p2_1), 0.70)
+
+        msgs = [
+            {"id": 1, "role": "user", "content": "tắt đèn", "created_at": t_2355 - 300},
+            {"id": 2, "role": "model", "content": "Đã tắt đèn", "created_at": t_2355 - 240},
+        ]
+        c_before = gemini_client._build_history_contents(msgs, now_ts=t_2355, stable_dates=True)
+        c_after = gemini_client._build_history_contents(msgs, now_ts=t_0005, stable_dates=True)
+        self.assertEqual(c_before, c_after)
+        self.assertIn("[19/11 23:50]", c_before[0]["parts"][0]["text"])
+
+        uid = 9901
+        database.get_or_create_user(uid)
+        gemini_client._HISTORY_WINDOW_ANCHORS.clear()
+        try:
+            for i in range(40):
+                database.add_chat_message(uid, "user" if i % 2 == 0 else "model", f"msg {i}")
+            w1 = gemini_client._stabilize_history_window(
+                database.get_recent_history(uid, limit=50),
+                user_id=uid,
+                window_key="pass1",
+                min_keep=32,
+                max_keep=48,
+            )
+            self.assertEqual(len(w1), 32)
+            for i in range(40, 44):
+                database.add_chat_message(uid, "user" if i % 2 == 0 else "model", f"msg {i}")
+            w2 = gemini_client._stabilize_history_window(
+                database.get_recent_history(uid, limit=50),
+                user_id=uid,
+                window_key="pass1",
+                min_keep=32,
+                max_keep=48,
+            )
+            self.assertEqual(len(w2), 36)
+            self.assertEqual([m["id"] for m in w2[:32]], [m["id"] for m in w1])
+        finally:
+            gemini_client._HISTORY_WINDOW_ANCHORS.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

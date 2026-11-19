@@ -460,7 +460,7 @@ def get_recent_history(user_id: int, limit: int = 12) -> List[Dict[str, Any]]:
     with _open_conn() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-        SELECT role, content, delta_affinity, created_at 
+        SELECT id, role, content, delta_affinity, created_at 
         FROM chat_history 
         WHERE user_id = ? 
         ORDER BY id DESC LIMIT ?

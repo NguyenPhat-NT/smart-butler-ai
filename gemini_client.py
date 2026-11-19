@@ -1091,8 +1091,49 @@ def _sanitize_reminder_promise_phrase(text: str, allow_promise: bool) -> str:
     return clean
 
 
-def _format_turn_content(msg: Dict[str, Any], now_ts: Optional[float] = None) -> str:
-    """Gắn mốc thời gian VN tương đối ([Hôm nay HH:MM] / [Hôm qua HH:MM] / [dd/mm HH:MM]) vào lịch sử."""
+_HISTORY_WINDOW_ANCHORS: Dict[Tuple[int, str], Tuple[str, Any]] = {}
+
+
+def _history_row_key(msg: Dict[str, Any]) -> Tuple[str, Any]:
+    if msg.get("id") is not None:
+        return ("id", int(msg["id"]))
+    raw_ts = msg.get("timestamp") if msg.get("timestamp") is not None else msg.get("created_at")
+    return ("sig", str(raw_ts or ""), str(msg.get("role") or ""), str(msg.get("content") or "")[:64])
+
+
+def _stabilize_history_window(
+    messages: List[Dict[str, Any]],
+    user_id: Optional[int],
+    window_key: str = "pass1",
+    min_keep: int = 32,
+    max_keep: int = 48,
+) -> List[Dict[str, Any]]:
+    """Giữ điểm bắt đầu cửa sổ lịch sử ổn định theo lô để tối đa hóa Context Cache prefix hit."""
+    if not messages:
+        return []
+    scope = (int(user_id or 0), window_key)
+    if len(messages) <= min_keep:
+        _HISTORY_WINDOW_ANCHORS[scope] = _history_row_key(messages[0])
+        return list(messages)
+    anchor = _HISTORY_WINDOW_ANCHORS.get(scope)
+    if anchor is not None:
+        for idx, m in enumerate(messages):
+            if _history_row_key(m) == anchor:
+                tail_len = len(messages) - idx
+                if min_keep <= tail_len <= max_keep:
+                    return list(messages[idx:])
+                break
+    tail = list(messages[-min_keep:])
+    _HISTORY_WINDOW_ANCHORS[scope] = _history_row_key(tail[0])
+    return tail
+
+
+def _format_turn_content(
+    msg: Dict[str, Any],
+    now_ts: Optional[float] = None,
+    stable_dates: bool = False,
+) -> str:
+    """Gắn mốc thời gian VN vào lịch sử (`stable_dates=True` dùng [dd/mm HH:MM] bất biến để giữ cache qua 0h)."""
     content = str(msg.get("content") or "")
     if not content or re.match(r"^\[(?:Hôm nay|Hôm qua|\d{2}/\d{2})\s+\d{2}:\d{2}\]", content):
         return content
@@ -1100,13 +1141,21 @@ def _format_turn_content(msg: Dict[str, Any], now_ts: Optional[float] = None) ->
     if not raw_ts:
         return content
     import diary_helper
-    label = diary_helper.format_relative_vn_ts(raw_ts, now_ts=now_ts)
+    label = (
+        diary_helper.format_absolute_vn_ts(raw_ts)
+        if stable_dates
+        else diary_helper.format_relative_vn_ts(raw_ts, now_ts=now_ts)
+    )
     if label:
         return f"[{label}] {content}"
     return content
 
 
-def _build_history_contents(messages: List[Dict[str, Any]], now_ts: Optional[float] = None) -> List[Dict[str, Any]]:
+def _build_history_contents(
+    messages: List[Dict[str, Any]],
+    now_ts: Optional[float] = None,
+    stable_dates: bool = False,
+) -> List[Dict[str, Any]]:
     """Chuyển lịch sử chat sang Gemini contents kèm dải phân cách khi có khoảng lặng >= 2 giờ."""
     import diary_helper
     base_now = float(now_ts if now_ts is not None else time.time())
@@ -1116,10 +1165,14 @@ def _build_history_contents(messages: List[Dict[str, Any]], now_ts: Optional[flo
         role = "user" if msg.get("role") == "user" else "model"
         raw_ts = msg.get("timestamp") if msg.get("timestamp") is not None else msg.get("created_at")
         cur_ts = diary_helper.parse_ts_float(raw_ts)
-        formatted = _format_turn_content(msg, now_ts=base_now)
+        formatted = _format_turn_content(msg, now_ts=base_now, stable_dates=stable_dates)
         if prev_ts is not None and cur_ts is not None and (cur_ts - prev_ts) >= 7200.0:
             gap_label = diary_helper.format_vn_duration(cur_ts - prev_ts)
-            cur_label = diary_helper.format_relative_vn_ts(cur_ts, now_ts=base_now)
+            cur_label = (
+                diary_helper.format_absolute_vn_ts(cur_ts)
+                if stable_dates
+                else diary_helper.format_relative_vn_ts(cur_ts, now_ts=base_now)
+            )
             formatted = f"--- (Sau khoảng lặng {gap_label}, tới {cur_label}) ---\n{formatted}"
         contents.append({"role": role, "parts": [{"text": formatted}]})
         if cur_ts is not None:
@@ -1738,10 +1791,11 @@ async def chat_with_butler(user_id: int, user_message: str,
     affinity = user_state["affinity_score"]
     mood = user_state["mood"]
 
-    # 1. Lấy lịch sử 40 tin gần nhất trước để cung cấp ngữ cảnh đầy đủ mốc thời gian cho bộ truy xuất trí nhớ
-    recent = database.get_recent_history(user_id, limit=40)
+    # 1. Lấy lịch sử theo lô ổn định (32..48 tin) để giữ nguyên prefix cache qua nhiều lượt liên tiếp
+    recent = database.get_recent_history(user_id, limit=50)
     if recent and recent[-1]["role"] == "user" and current_message_saved:
         recent = recent[:-1]
+    recent = _stabilize_history_window(recent, user_id=user_id, window_key="pass1", min_keep=32, max_keep=48)
 
     text_content = user_message.strip() if user_message else "Gửi ảnh/video cho bạn xem nè."
 
@@ -1860,7 +1914,7 @@ async def chat_with_butler(user_id: int, user_message: str,
         open_loops=database.get_open_loops(user_id, now_ts=now_ts),
     )
 
-    pass1_system_instruction = character_bible.build_pass1_system_instruction(
+    pass1_static_sys, pass1_dynamic_ctx = character_bible.build_pass1_prompt_parts(
         affinity, mood, pass1_memories, daily_trends, daily_diary,
         time_context=time_ctx, current_activity=current_act,
         personality_traits=personality_traits,
@@ -1876,7 +1930,7 @@ async def chat_with_butler(user_id: int, user_message: str,
         temporal_notes=temporal_notes,
     )
 
-    contents = _build_history_contents(recent, now_ts=now_ts)
+    contents = _build_history_contents(recent, now_ts=now_ts, stable_dates=True)
 
     # Tạo nội dung lượt nhắn hiện tại của user (hỗ trợ nhiều ảnh, file ảnh, sticker)
     current_parts = []
@@ -1897,7 +1951,13 @@ async def chat_with_butler(user_id: int, user_message: str,
         })
 
     current_user_text = _format_current_user_turn_text(text_content, recent=recent, now_ts=now_ts)
-    current_parts.append({"text": current_user_text})
+    # Gắn bối cảnh động (đồng hồ/trạng thái/ký ức) vào lượt cuối sau toàn bộ lịch sử để toàn bộ system + history giữ Cache Hit
+    current_turn_prompt = (
+        f"=== BỐI CẢNH HIỆN TẠI LƯỢT NÀY ===\n{pass1_dynamic_ctx}\n\n=== TIN NHẮN HIỆN TẠI ===\n{current_user_text}"
+        if pass1_dynamic_ctx
+        else current_user_text
+    )
+    current_parts.append({"text": current_turn_prompt})
     contents.append({"role": "user", "parts": current_parts})
     
     # === BƯỚC 1: PASS 1 - CHIẾN LƯỢC TÂM LÝ & ĐỘC THOẠI NỘI TÂM ===
@@ -1907,7 +1967,7 @@ async def chat_with_butler(user_id: int, user_message: str,
 
     raw_p1 = await call_gemini_api(
         model=CHAT_MODEL,
-        system_instruction=pass1_system_instruction,
+        system_instruction=pass1_static_sys,
         contents=contents,
         response_json=True,
         allowed_keys=pinned_keys,
@@ -2145,6 +2205,7 @@ async def chat_with_butler(user_id: int, user_message: str,
         temporal_notes=pass2_temporal_notes,
         now_playing_text=now_playing_text,
         now_ts=now_ts,
+        user_id=user_id,
     )
     p1_data["logic_audit"] = logic_audit
     p1_data["logic_cancelled"] = bool(logic_cancelled)
@@ -2505,6 +2566,7 @@ async def _polish_and_audit_response(
     now_playing_text: str = "",
     now_ts: Optional[float] = None,
     recent_bot_texts_for_proactive: Optional[List[str]] = None,
+    user_id: Optional[int] = None,
 ) -> Tuple[List[str], Dict[str, Any], bool]:
     """
     Chạy Pass 2 chuốt lời thoại rồi đưa qua Pass 3 Kiểm toán Logic (Hybrid Gate):
@@ -2526,6 +2588,7 @@ async def _polish_and_audit_response(
         temporal_notes=temporal_notes,
         now_playing_text=now_playing_text,
         now_ts=now_ts,
+        user_id=user_id,
     )
     draft_vt = (out_voice_holder or {}).get("voice_text") if out_voice_holder is not None else None
 
@@ -2599,6 +2662,7 @@ async def _polish_and_audit_response(
         now_playing_text=now_playing_text,
         now_ts=now_ts,
         audit_critique=critique,
+        user_id=user_id,
     )
     rewritten_vt = (retry_voice_holder or {}).get("voice_text") if retry_voice_holder is not None else None
     fallback_marker = "kết nối ai vừa tạm gián đoạn"
@@ -2655,6 +2719,7 @@ async def _run_pass2_polisher(
     now_playing_text: str = "",
     now_ts: Optional[float] = None,
     audit_critique: str = "",
+    user_id: Optional[int] = None,
 ) -> List[str]:
     """Chuốt ý tưởng Pass 1 / Proactive Eval thành 1-3 tin nhắn ngắn theo persona hiện hành."""
     import diary_helper
@@ -2664,7 +2729,10 @@ async def _run_pass2_polisher(
     now_v = float(now_ts if now_ts is not None else (time_context or {}).get("now_ts") or time.time())
     effective_time_ctx = time_context or diary_helper.get_vietnam_time_context(now_ts=now_v)
     pass2_system = character_bible.build_pass2_system_instruction(time_context=effective_time_ctx)
-    pass2_contents = _build_history_contents(recent[-16:], now_ts=now_v)
+    pass2_recent = _stabilize_history_window(
+        recent, user_id=user_id, window_key="pass2", min_keep=14, max_keep=24
+    )
+    pass2_contents = _build_history_contents(pass2_recent, now_ts=now_v, stable_dates=True)
 
     user_intent = p1_data.get("user_intent", "")
     direct_ans = p1_data.get("direct_answer_strategy", "")
@@ -2973,7 +3041,7 @@ async def evaluate_proactive_turn(user_id: int, wake_ritual_hint: str = "") -> D
         temporal_notes=temporal_notes,
     )
 
-    contents = _build_history_contents(recent, now_ts=now_ts)
+    contents = _build_history_contents(recent, now_ts=now_ts, stable_dates=True)
     cur_clock = diary_helper.format_relative_vn_ts(now_ts, now_ts=now_ts) or (time_ctx or {}).get("time_str", "")
     contents.append({
         "role": "user",
@@ -3033,6 +3101,7 @@ async def evaluate_proactive_turn(user_id: int, wake_ritual_hint: str = "") -> D
             now_playing_text=now_playing_text,
             now_ts=now_ts,
             recent_bot_texts_for_proactive=recent_bot_texts,
+            user_id=user_id,
         )
         eval_data["logic_audit"] = logic_audit
         if logic_cancelled or not msgs:

@@ -4,7 +4,7 @@ System Instructions cho Smart Butler AI (Pass 1 Planner, Pass 2 Polisher, Pass 3
 Tách biệt hoàn toàn khỏi câu chuyện cá nhân; dùng cấu hình động từ `persona.py`.
 """
 import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import config
 import persona
@@ -12,7 +12,7 @@ import persona
 LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=config.TIMEZONE_OFFSET_HOURS))
 
 
-def build_pass1_system_instruction(
+def build_pass1_prompt_parts(
     affinity_score: int,
     mood: str,
     known_facts: List[str],
@@ -31,7 +31,8 @@ def build_pass1_system_instruction(
     open_loops_text: str = "",
     now_playing_text: str = "",
     temporal_notes: str = "",
-) -> str:
+) -> Tuple[str, str]:
+    """Tách Pass 1 thành `(static_system, dynamic_context)` để tối đa hóa prefix Context Cache."""
     pcfg = persona.get_persona_config()
     b_name = pcfg["butler_name"]
     o_name = pcfg["owner_name"]
@@ -96,18 +97,10 @@ def build_pass1_system_instruction(
     except Exception:
         pass
 
-    prompt = f"""
+    static_prompt = f"""
 Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản gia & Trợ lý Smart Home phục vụ **{o_name}**.
 
 {persona_block}
-{trends_section}{session_state_section}
-{time_section}{temporal_section}
-=== TRẠNG THÁI HIỆN TẠI ===
-- Chỉ số gắn kết/tin cậy: {affinity_score}/100 | Trạng thái: {mood}
-{mood_hint_line}{circadian_line}{now_playing_line}
-=== KÝ ỨC & HỒ SƠ CHỦ NHÀ (ACTIVE MEMORY) ===
-{facts_str}{memory_miss_note}
-{open_loops_block}{reminders_section}
 📌 NGUYÊN TẮC VẬN HÀNH QUẢN GIA THÔNG MINH:
 1. KIỂM CHỨNG DỮ KIỆN & ĐỒNG HỒ:
    - Chỉ dựa vào `ĐỒNG HỒ THỰC TẾ`, `KIỂM CHỨNG TOÁN HỌC THỜI GIAN`, `ACTIVE MEMORY`, `TRẠNG THÁI PHIÊN` và ngữ cảnh lịch sử. Không bịa số liệu hay mốc giờ.
@@ -137,7 +130,7 @@ Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản
      * **CHỈ điền `fetch_tools`** khi câu nói (text hoặc Voice) liên quan đến trạng thái phòng/thiết bị/nhiệt ẩm/loa/mạng Wi-Fi/hiện diện/thói quen. Chat bình thường KHÔNG liên quan thiết bị -> BẮT BUỘC để `"fetch_tools": []`.
      * Khi đã chọn `fetch_tools` khác rỗng: KHÔNG đoán mò Bật/Tắt/% trong `raw_ideas`; ghi hướng trả lời trung tính để Pass 2 điền đúng số liệu thật từ MCP.
    - **Tra cứu mạng (`web_search_query`)**: điền từ khóa tra Google khi cần thông tin thực tế mới ngoài ký ức (giá cả, tin tức, lịch chiếu, hướng dẫn kỹ thuật); chat bình thường đặt `null`.
-   - **Voice note (`send_voice`)**: CHỈ đặt `true` khi chủ nhà yêu cầu nghe thoại / đọc to hoặc ở bản tin chào buổi sáng nếu muốn.{media_note}
+   - **Voice note (`send_voice`)**: CHỈ đặt `true` khi chủ nhà yêu cầu nghe thoại / đọc to hoặc ở bản tin chào buổi sáng nếu muốn.
 
 === YÊU CẦU ĐẦU RA PASS 1 (JSON BẮT BUỘC) ===
 {{
@@ -187,8 +180,62 @@ Bạn là bộ não lập kế hoạch (Pass 1) của **{b_name}** — AI Quản
   "fetch_tools": []
   /* CHỈ điền tên tool khi cần đọc trạng thái phòng/mạng (["get_fan_state", "get_plugs_state", "get_presence_state", "get_room_climate", "get_speaker_state", "get_router_state", "get_room_overview", "get_learned_habits"]); bình thường để [] */
 }}
-"""
-    return prompt.strip()
+""".strip()
+
+    dynamic_prompt = f"""
+{trends_section}{session_state_section}
+{time_section}{temporal_section}
+=== TRẠNG THÁI HIỆN TẠI ===
+- Chỉ số gắn kết/tin cậy: {affinity_score}/100 | Trạng thái: {mood}
+{mood_hint_line}{circadian_line}{now_playing_line}
+=== KÝ ỨC & HỒ SƠ CHỦ NHÀ (ACTIVE MEMORY) ===
+{facts_str}{memory_miss_note}
+{open_loops_block}{reminders_section}{media_note}
+""".strip()
+    return static_prompt, dynamic_prompt
+
+
+def build_pass1_system_instruction(
+    affinity_score: int,
+    mood: str,
+    known_facts: List[str],
+    daily_trends: str = "",
+    daily_diary: str = "",
+    time_context: Optional[Dict[str, Any]] = None,
+    current_activity: str = "",
+    personality_traits: Optional[Dict[str, Any]] = None,
+    memory_miss: bool = False,
+    missed_queries: Optional[List[str]] = None,
+    situational_mood_hint: str = "",
+    pending_reminders: Optional[List[Dict[str, Any]]] = None,
+    has_media: bool = False,
+    session_state_text: str = "",
+    circadian_text: str = "",
+    open_loops_text: str = "",
+    now_playing_text: str = "",
+    temporal_notes: str = "",
+) -> str:
+    static_prompt, dynamic_prompt = build_pass1_prompt_parts(
+        affinity_score=affinity_score,
+        mood=mood,
+        known_facts=known_facts,
+        daily_trends=daily_trends,
+        daily_diary=daily_diary,
+        time_context=time_context,
+        current_activity=current_activity,
+        personality_traits=personality_traits,
+        memory_miss=memory_miss,
+        missed_queries=missed_queries,
+        situational_mood_hint=situational_mood_hint,
+        pending_reminders=pending_reminders,
+        has_media=has_media,
+        session_state_text=session_state_text,
+        circadian_text=circadian_text,
+        open_loops_text=open_loops_text,
+        now_playing_text=now_playing_text,
+        temporal_notes=temporal_notes,
+    )
+    return f"{static_prompt}\n\n{dynamic_prompt}".strip() if dynamic_prompt else static_prompt
 
 
 def _format_custom_character_lines(pcfg: Dict[str, str], include_owner_bio: bool = False) -> str:
@@ -212,12 +259,12 @@ def build_pass2_system_instruction(time_context: Optional[Dict[str, Any]] = None
     b_name = pcfg["butler_name"]
     o_name = pcfg["owner_name"]
     import diary_helper
-    clock_block = "\n" + diary_helper.format_authoritative_time_banner(time_context) + "\n" if time_context else ""
+    clock_block = "\n" + diary_helper.format_authoritative_time_banner(time_context).strip() if time_context else ""
     custom_char_block = _format_custom_character_lines(pcfg, include_owner_bio=True)
 
     prompt = f"""
 Bạn là bộ diễn đạt ngôn ngữ (Pass 2) của **{b_name}** — AI Quản gia & Trợ lý Smart Home phục vụ **{o_name}**.
-{clock_block}
+
 NHIỆM VỤ:
 Chuyển ý tưởng từ Pass 1 (`raw_ideas`) thành 1–2 tin nhắn Telegram tự nhiên, gọn gàng, lịch thiệp và đúng sự thật (hoặc nếu lượt này gửi `voice_text`, giữ chữ dẫn và lời thoại cùng một mạch thống nhất).
 
@@ -240,7 +287,7 @@ QUY TẮC BẮT BUỘC:
     "Tin nhắn 1",
     "Tin nhắn 2 (tùy chọn nếu cần tách ý)"
   ]
-}}
+}}{clock_block}
 """
     return prompt.strip()
 
@@ -291,15 +338,7 @@ def build_proactive_eval_instruction(
 Bạn là bộ não đánh giá chủ động của **{b_name}** (AI Quản gia Smart Home của **{o_name}**).
 Quyết định xem thời điểm này CÓ NÊN chủ động nhắn một tin hữu ích không (`send`), hoãn lại (`defer`), hay im lặng chờ (`wait_for_user`).
 
-{persona_section}{clock_banner}
-{temporal_section}{session_section}
-- Thời gian từ tin nhắn cuối của {o_name}: {int(round(mins_since_user))} phút | Của {b_name}: {int(round(mins_since_bot))} phút.
-- Số tin chủ động chưa được trả lời liên tiếp: {unanswered_proactive_count} (nếu >= 2 PHẢI chọn `wait_for_user` hoặc `defer`).
-- Nhịp sinh học: {circadian_text}
-{trends_line}{now_playing_line}{ritual_line}{open_loops_line}
-- Hồ sơ chủ nhà:\n{facts_str}
-- Các tin gần đây đã gửi (TRÁNH LẶP Ý):\n{recent_sent_str}
-
+{persona_section}
 QUY TẮC:
 - Chỉ chọn `"send"` khi thực sự có lý do hữu ích tự nhiên (chào buổi sáng kèm thời tiết, nhắc việc đang đến gần, hỏi thăm nhẹ sau khoảng nghỉ dài đúng mạch open_loop, hoặc nhắc phòng/thiết bị quan trọng). Nếu không cần thiết -> chọn `"defer"` (`recheck_after_mins`: 45..120).
 
@@ -310,8 +349,19 @@ QUY TẮC:
   "proactive_reason": "<Lý do ngắn>",
   "emotional_strategy": "<chu đáo | gọn gàng | thân thiện>",
   "raw_ideas": ["<Nội dung chính muốn nhắn nếu decision='send'>"],
-  "new_mood": "{mood}"
+  "new_mood": "<sẵn sàng | chu đáo | tập trung | thân thiện | thư giãn>"
 }}
+
+=== BỐI CẢNH TỨC THỜI ===
+{clock_banner}
+{temporal_section}{session_section}
+- Trạng thái hiện tại: {mood}
+- Thời gian từ tin nhắn cuối của {o_name}: {int(round(mins_since_user))} phút | Của {b_name}: {int(round(mins_since_bot))} phút.
+- Số tin chủ động chưa được trả lời liên tiếp: {unanswered_proactive_count} (nếu >= 2 PHẢI chọn `wait_for_user` hoặc `defer`).
+- Nhịp sinh học: {circadian_text}
+{trends_line}{now_playing_line}{ritual_line}{open_loops_line}
+- Hồ sơ chủ nhà:\n{facts_str}
+- Các tin gần đây đã gửi (TRÁNH LẶP Ý):\n{recent_sent_str}
 """
     return prompt.strip()
 
