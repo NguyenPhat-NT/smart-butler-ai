@@ -17,6 +17,7 @@
 #include <ArduinoOTA.h>
 #include <WebServer.h>
 #include <Update.h>
+#include <Preferences.h>
 #include <esp_wifi.h>
 #include <driver/i2s_std.h>
 #include <driver/temperature_sensor.h>
@@ -102,8 +103,52 @@ static TaskHandle_t  s_wsTaskHandle  = nullptr;
 static volatile bool     g_otaInProgress    = false;
 static volatile bool     s_wsConnected      = false;
 static volatile bool     s_lowLatencyMode   = false;
+static volatile bool     s_wsReconfigureReq = false;
+static String            s_serverHost       = OPENSTICK_HOST;
+static uint16_t          s_serverPort       = OPENSTICK_PORT;
 static volatile uint32_t s_lastAudioRxAt    = 0;
 static volatile uint32_t s_flushEpoch       = 0;
+
+static bool isValidServerHost(const String& host) {
+    if (host.length() == 0 || host.length() > 64) {
+        return false;
+    }
+    for (size_t i = 0; i < host.length(); ++i) {
+        char c = host[i];
+        bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  c == '.' || c == '-' || c == '_';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void loadServerConfigFromNvs() {
+    Preferences prefs;
+    if (prefs.begin("spk_cfg", true)) {
+        String h = prefs.getString("host", "");
+        uint16_t p = prefs.getUShort("port", 0);
+        prefs.end();
+        h.trim();
+        if (isValidServerHost(h)) {
+            s_serverHost = h;
+        }
+        if (p > 0) {
+            s_serverPort = p;
+        }
+    }
+    Serial.printf("[CFG] WebSocket Server: ws://%s:%u%s\n", s_serverHost.c_str(), (unsigned)s_serverPort, WS_AUDIO_PATH);
+}
+
+static void saveServerConfigToNvs(const String& host, uint16_t port) {
+    Preferences prefs;
+    if (prefs.begin("spk_cfg", false)) {
+        prefs.putString("host", host);
+        prefs.putUShort("port", port);
+        prefs.end();
+    }
+}
 
 // Telemetry chan doan truc tiep qua GET /debug
 static volatile uint32_t s_dbgUnderruns     = 0;
@@ -965,8 +1010,21 @@ static void audioWsTask(void* param) {
             continue;
         }
 
+        if (s_wsReconfigureReq) {
+            s_wsReconfigureReq = false;
+            if (wsConfigured || s_wsConnected) {
+                s_wsClient.disconnect();
+                s_wsConnected = false;
+                wsConfigured = false;
+            }
+            opusRingReset();
+            s_flushEpoch = s_flushEpoch + 1U;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         if (!wsConfigured) {
-            s_wsClient.begin(OPENSTICK_HOST, OPENSTICK_PORT, WS_AUDIO_PATH);
+            s_wsClient.begin(s_serverHost.c_str(), s_serverPort, WS_AUDIO_PATH);
             s_wsClient.onEvent(onWebSocketEvent);
             s_wsClient.setReconnectInterval(1500);
             s_wsClient.enableHeartbeat(15000, 5000, 2);
@@ -1048,7 +1106,14 @@ static void handleWebOtaPage() {
     html += String(PIN_DHT11_DATA);
     html += F(" | Touch=");
     html += String(PIN_TOUCH_TTP223);
-    html += F("<br><b>Vùng OTA trống:</b> ");
+    html += F("<br><b>Server WS:</b> ws://");
+    html += s_serverHost;
+    html += F(":");
+    html += String((unsigned)s_serverPort);
+    html += WS_AUDIO_PATH;
+    html += F(" (");
+    html += (s_wsConnected ? F("Đã nối") : F("Đang chờ"));
+    html += F(")<br><b>Vùng OTA trống:</b> ");
     html += String(ESP.getFreeSketchSpace() / 1024);
     html += F(" KB | <b>Uptime:</b> ");
     html += String(millis() / 1000);
@@ -1080,7 +1145,15 @@ static void handleHealthJson() {
     json += OTA_HOSTNAME;
     json += "\",\"ip\":\"";
     json += WiFi.localIP().toString();
-    json += "\",\"ssid\":\"";
+    json += "\",\"mac\":\"";
+    json += WiFi.macAddress();
+    json += "\",\"server_host\":\"";
+    json += s_serverHost;
+    json += "\",\"server_port\":";
+    json += String((unsigned)s_serverPort);
+    json += ",\"ws_connected\":";
+    json += (s_wsConnected ? "true" : "false");
+    json += ",\"ssid\":\"";
     json += WiFi.SSID();
     json += "\",\"rssi\":";
     json += String(WiFi.RSSI());
@@ -1212,6 +1285,62 @@ static void handleDebugJson() {
     otaServer.send(200, "application/json", json);
 }
 
+static void handleSetServerJson() {
+    String host = otaServer.hasArg("host") ? otaServer.arg("host") : "";
+    String portStr = otaServer.hasArg("port") ? otaServer.arg("port") : "";
+    if (host.length() == 0 && otaServer.hasArg("plain")) {
+        String body = otaServer.arg("plain");
+        int hIdx = body.indexOf("\"host\"");
+        if (hIdx >= 0) {
+            int col = body.indexOf(':', hIdx);
+            int q1 = body.indexOf('"', col + 1);
+            int q2 = body.indexOf('"', q1 + 1);
+            if (col >= 0 && q1 >= 0 && q2 > q1) {
+                host = body.substring(q1 + 1, q2);
+            }
+        }
+        int pIdx = body.indexOf("\"port\"");
+        if (pIdx >= 0) {
+            int col = body.indexOf(':', pIdx);
+            if (col >= 0) {
+                String tail = body.substring(col + 1);
+                tail.trim();
+                portStr = String(tail.toInt());
+            }
+        }
+    }
+    host.trim();
+    if (!isValidServerHost(host)) {
+        otaServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_host\"}");
+        return;
+    }
+    long parsedPort = portStr.toInt();
+    uint16_t port = (parsedPort > 0 && parsedPort <= 65535) ? (uint16_t)parsedPort : (uint16_t)OPENSTICK_PORT;
+
+    bool changed = (host != s_serverHost) || (port != s_serverPort);
+    s_serverHost = host;
+    s_serverPort = port;
+    saveServerConfigToNvs(host, port);
+    if (changed || !s_wsConnected) {
+        s_wsReconfigureReq = true;
+    }
+
+    String resp = "{\"ok\":true,\"server_host\":\"";
+    resp += s_serverHost;
+    resp += "\",\"server_port\":";
+    resp += String((unsigned)s_serverPort);
+    resp += ",\"ip\":\"";
+    resp += WiFi.localIP().toString();
+    resp += "\",\"mac\":\"";
+    resp += WiFi.macAddress();
+    resp += "\",\"hostname\":\"";
+    resp += OTA_HOSTNAME;
+    resp += "\",\"reconnecting\":";
+    resp += ((changed || !s_wsConnected) ? "true" : "false");
+    resp += "}";
+    otaServer.send(200, "application/json", resp);
+}
+
 static void setupOTA() {
     ArduinoOTA.setHostname(OTA_HOSTNAME);
     ArduinoOTA.setPort(OTA_PORT);
@@ -1244,6 +1373,8 @@ static void setupOTA() {
     otaServer.on("/", HTTP_GET, handleWebOtaPage);
     otaServer.on("/health", HTTP_GET, handleHealthJson);
     otaServer.on("/debug", HTTP_GET, handleDebugJson);
+    otaServer.on("/set_server", HTTP_GET, handleSetServerJson);
+    otaServer.on("/set_server", HTTP_POST, handleSetServerJson);
     otaServer.on(
         "/update",
         HTTP_POST,
@@ -1370,6 +1501,7 @@ void setup() {
     }
 
     setupOTA();
+    loadServerConfigFromNvs();
     markPerformanceActivity(IDLE_POWER_HOLD_MS);
 
     // ESP32-C3 (1 nhan RISC-V): I2S+Opus muc 4, WebSocket muc 3, cam bien/nut cham muc 2

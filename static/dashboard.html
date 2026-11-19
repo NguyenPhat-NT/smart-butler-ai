@@ -431,6 +431,7 @@
             <div class="row">
               <span id="jbEspBadge" class="badge b-warn">ESP32: đang chờ</span>
               <span id="jbDhtBadge" class="badge b-info">🌡️ —°C • 💧 —%</span>
+              <button id="btnJbScan" type="button" class="btn-sm btn-blue">🔍 Quét tìm loa</button>
             </div>
           </div>
 
@@ -2944,6 +2945,33 @@
         showToast("Lỗi phát nhạc", e.message, "error");
       }
     };
+
+    $("btnJbScan")?.addEventListener("click", async () => {
+      const btn = $("btnJbScan");
+      const oldTxt = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Đang quét loa...";
+      try {
+        const res = await api("/api/jukebox/scan", { method: "POST", body: JSON.stringify({ adopt: true }) });
+        if (state.overview && res.jukebox) {
+          state.overview.jukebox = res.jukebox;
+          renderJukebox();
+          renderQuickHub();
+        }
+        if (res.found) {
+          const rssiStr = res.rssi != null ? ` (${res.rssi} dBm)` : "";
+          const wsStr = res.ws_connected ? " • WebSocket Đã nối" : (res.adopt_note ? ` • ${res.adopt_note}` : "");
+          showToast("Tìm thấy loa ESP32-C3", `${res.ip}${rssiStr}${wsStr}`);
+        } else {
+          showToast("Chưa thấy loa ESP32-C3", res.message || "Kiểm tra nguồn & Wi-Fi của loa", "warn");
+        }
+      } catch (e) {
+        showToast("Lỗi quét loa", e.message, "error");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = oldTxt;
+      }
+    });
 
     $("btnJbToggle").addEventListener("click", () => jukeboxCtrl("toggle"));
     $("btnJbSkip").addEventListener("click", () => jukeboxCtrl("skip"));

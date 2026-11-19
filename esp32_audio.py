@@ -66,6 +66,8 @@ _META_EQ_SETTINGS = "esp32_eq_settings"
 _META_NORM_ENABLED = "esp32_norm_enabled"
 _META_ALARMS = "esp32_alarms"
 _META_TIMED_SESSION = "esp32_timed_session"
+_META_ESP32_SPEAKER_IP = "esp32_speaker_ip"
+_META_ESP32_SPEAKER_MAC = "esp32_speaker_mac"
 STREAM_BATCH_FRAMES = 1    # 20ms (960 bytes): vừa khít 1 gói TCP/Wi-Fi (<1460 MSS) và phản hồi mượt
 PREFILL_LEAD_SEC = 0.34    # Bơm trước ~340ms khi bắt đầu/nối lại để làm đầy jitter buffer trên ESP32
 _SILENCE_FRAME = b"\x00" * FRAME_BYTES
@@ -2594,8 +2596,12 @@ class ESP32AudioManager:
             raw_norm = database.get_metadata(_META_NORM_ENABLED)
             raw_alarms = database.get_metadata(_META_ALARMS)
             raw_sess = database.get_metadata(_META_TIMED_SESSION)
+            raw_spk_ip = database.get_metadata(_META_ESP32_SPEAKER_IP)
         except Exception:
             return
+
+        if not self.esp32_ip and isinstance(raw_spk_ip, str) and raw_spk_ip.strip():
+            self.esp32_ip = raw_spk_ip.strip()
 
         if raw_vol is not None and str(raw_vol).strip():
             try:
@@ -3465,14 +3471,175 @@ class ESP32AudioManager:
             self._enqueue_ws_item(q, payload)
 
     def mark_esp32_seen(self, ip: str = "", rssi: Optional[int] = None) -> None:
-        if ip:
-            self.esp32_ip = ip
+        clean_ip = str(ip or "").strip()
+        if clean_ip and clean_ip != self.esp32_ip:
+            self.esp32_ip = clean_ip
+            try:
+                database.set_metadata(_META_ESP32_SPEAKER_IP, clean_ip)
+            except Exception:
+                pass
         if rssi is not None:
             try:
                 self.esp32_rssi = int(rssi)
             except (TypeError, ValueError):
                 pass
         self.esp32_last_seen = time.time()
+
+    async def discover_speaker_on_lan(
+        self,
+        candidate_ips: Optional[List[str]] = None,
+        adopt: bool = True,
+    ) -> Dict[str, Any]:
+        """Quét mạng LAN dò loa ESP32-C3 (`GET /health` -> codec=opus) và tùy chọn trỏ WebSocket về server này."""
+        import lan_presence
+
+        self._ensure_persisted_loaded()
+        net = await lan_presence.get_local_network_info()
+        local_ip = str(net.get("local_ip") or "").strip()
+        dashboard_port = int(getattr(config, "DASHBOARD_PORT", 8080) or 8080)
+
+        ip_to_mac: Dict[str, str] = {}
+        ordered_ips: List[str] = []
+        seen_ips = set()
+
+        def _push_ip(ip_val: str) -> None:
+            s = str(ip_val or "").strip()
+            if not s or s in seen_ips:
+                return
+            try:
+                if ipaddress.ip_address(s).version == 4:
+                    seen_ips.add(s)
+                    ordered_ips.append(s)
+            except ValueError:
+                pass
+
+        try:
+            persisted_ip = str(database.get_metadata(_META_ESP32_SPEAKER_IP) or "").strip()
+        except Exception:
+            persisted_ip = ""
+
+        for ip_hint in (self.esp32_ip, persisted_ip):
+            _push_ip(ip_hint)
+        for extra_ip in candidate_ips or []:
+            _push_ip(extra_ip)
+
+        if candidate_ips is None:
+            try:
+                devs = await lan_presence.scan_lan_devices(probe_subnet=True)
+                devs_sorted = sorted(
+                    devs,
+                    key=lambda d: 1 if (d.get("is_phone") or d.get("is_pc") or d.get("is_gateway")) else 0,
+                )
+                for d in devs_sorted:
+                    d_ip = str(d.get("ip") or "")
+                    d_mac = lan_presence.normalize_mac(d.get("mac") or "")
+                    if d_ip:
+                        if d_mac:
+                            ip_to_mac[d_ip] = d_mac
+                        _push_ip(d_ip)
+            except Exception as e:
+                logger.debug(f"Speaker LAN scan_lan_devices skipped: {e}")
+
+        async def _probe_one(session: aiohttp.ClientSession, target_ip: str, sem: asyncio.Semaphore, timeout_s: float) -> Optional[Tuple[str, Dict[str, Any]]]:
+            async with sem:
+                try:
+                    async with session.get(f"http://{target_ip}/health", timeout=aiohttp.ClientTimeout(total=timeout_s)) as resp:
+                        if resp.status != 200:
+                            return None
+                        data = await resp.json(content_type=None)
+                        if isinstance(data, dict) and data.get("ok") is True and str(data.get("codec") or "").lower() == "opus":
+                            return target_ip, data
+                except Exception:
+                    return None
+            return None
+
+        found_ip = ""
+        found_data: Dict[str, Any] = {}
+        async with aiohttp.ClientSession() as session:
+            if ordered_ips:
+                sem1 = asyncio.Semaphore(24)
+                results = await asyncio.gather(*(_probe_one(session, ip_item, sem1, 1.5) for ip_item in ordered_ips))
+                hits = {ip_res: d_res for item in results if item for ip_res, d_res in [item]}
+                for ip_item in ordered_ips:
+                    if ip_item in hits:
+                        found_ip = ip_item
+                        found_data = hits[ip_item]
+                        break
+
+            # Dự phòng quét phần còn lại của subnet /24 nếu bảng ARP chưa có loa
+            if not found_ip and candidate_ips is None and local_ip:
+                try:
+                    net_obj = ipaddress.IPv4Network(f"{local_ip}/{net.get('prefix_len', '24')}", strict=False)
+                    if net_obj.num_addresses <= 256:
+                        rem_ips = [str(ip) for ip in net_obj.hosts() if str(ip) not in seen_ips and str(ip) != local_ip]
+                        sem2 = asyncio.Semaphore(32)
+                        results2 = await asyncio.gather(*(_probe_one(session, ip_item, sem2, 0.9) for ip_item in rem_ips))
+                        for item in results2:
+                            if item:
+                                found_ip, found_data = item
+                                break
+                except Exception as e:
+                    logger.debug(f"Speaker subnet sweep skipped: {e}")
+
+            if not found_ip:
+                return {
+                    "found": False,
+                    "message": "Không tìm thấy loa ESP32-C3 (codec=opus) trong mạng LAN. Hãy kiểm tra nguồn & Wi-Fi của loa.",
+                    "probed": len(ordered_ips),
+                    "jukebox": self.get_status_snapshot(),
+                }
+
+            found_mac = lan_presence.normalize_mac(str(found_data.get("mac") or ip_to_mac.get(found_ip) or ""))
+            self.mark_esp32_seen(ip=found_ip, rssi=found_data.get("rssi"))
+            if found_mac:
+                try:
+                    database.set_metadata(_META_ESP32_SPEAKER_MAC, found_mac)
+                except Exception:
+                    pass
+
+            adopted = False
+            adopt_note = ""
+            if adopt and local_ip:
+                cur_host = str(found_data.get("server_host") or "").strip()
+                cur_port = int(found_data.get("server_port") or 0) if str(found_data.get("server_port") or "").isdigit() else 0
+                cur_ws_ok = bool(found_data.get("ws_connected")) and (self.active_ws_clients > 0)
+                if cur_host == local_ip and cur_port == dashboard_port and cur_ws_ok:
+                    adopted = True
+                    adopt_note = "Loa đang kết nối sẵn với máy chủ này."
+                else:
+                    try:
+                        set_url = f"http://{found_ip}/set_server?host={quote(local_ip)}&port={dashboard_port}"
+                        async with session.get(set_url, timeout=aiohttp.ClientTimeout(total=2.5)) as sresp:
+                            if sresp.status == 200:
+                                adopted = True
+                                adopt_note = f"Đã trỏ WebSocket loa về {local_ip}:{dashboard_port}."
+                            else:
+                                adopt_note = f"Loa phản hồi HTTP {sresp.status} khi gọi /set_server."
+                    except Exception as e:
+                        adopt_note = f"Không gọi được /set_server trên loa ({type(e).__name__}: {e})."
+
+        if adopt and adopted and self.active_ws_clients == 0:
+            deadline = time.monotonic() + 3.5
+            while time.monotonic() < deadline and self.active_ws_clients == 0:
+                await asyncio.sleep(0.15)
+
+        self.publish_update()
+        logger.info(
+            f"🔊 [Speaker Scan] Tìm thấy loa tại {found_ip} "
+            f"(RSSI={found_data.get('rssi')} dBm, adopted={adopted}, ws_clients={self.active_ws_clients})"
+        )
+        return {
+            "found": True,
+            "ip": found_ip,
+            "mac": found_mac,
+            "hostname": str(found_data.get("hostname") or ""),
+            "rssi": found_data.get("rssi"),
+            "adopted": adopted,
+            "adopt_note": adopt_note,
+            "ws_connected": self.active_ws_clients > 0,
+            "health": found_data,
+            "jukebox": self.get_status_snapshot(),
+        }
 
     def is_esp32_online(self, now_ts: Optional[float] = None) -> bool:
         now = float(now_ts if now_ts is not None else time.time())

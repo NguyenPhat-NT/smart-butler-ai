@@ -1329,6 +1329,13 @@ async def handle_esp32_status(request: web.Request) -> web.Response:
     return _json_ok(esp32_audio.get_manager().get_status_snapshot())
 
 
+async def handle_jukebox_scan(request: web.Request) -> web.Response:
+    body = await _parse_json(request)
+    adopt = bool(_parse_bool_flag(body.get("adopt", True), default=True))
+    res = await esp32_audio.get_manager().discover_speaker_on_lan(adopt=adopt)
+    return _json_ok(res)
+
+
 async def handle_jukebox_play(request: web.Request) -> web.Response:
     body = await _parse_json(request)
     target = str(body.get("video_id") or body.get("query") or "").strip()
@@ -1802,6 +1809,7 @@ def create_app(bot=None, target_user_id: int = 0) -> web.Application:
 
     app.router.add_get("/api/jukebox/status", handle_esp32_status)
     app.router.add_get("/api/jukebox/live_ws", handle_jukebox_live_ws)
+    app.router.add_post("/api/jukebox/scan", handle_jukebox_scan)
     app.router.add_post("/api/jukebox/play", handle_jukebox_play)
     app.router.add_post("/api/jukebox/control", handle_jukebox_control)
     app.router.add_post("/api/jukebox/eq", handle_jukebox_eq)

@@ -664,6 +664,81 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
         self.assertEqual(iface, "wlan0")
         self.assertEqual(gw, "192.168.1.1")
 
+    async def test_speaker_lan_discovery_and_scan_route(self):
+        mgr = esp32_audio.ESP32AudioManager()
+        called_urls = []
+
+        class _FakeResp:
+            def __init__(self, status, payload):
+                self.status = status
+                self._payload = payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def json(self, content_type=None):
+                return self._payload
+
+        class _FakeSess:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get(self, url, **kw):
+                called_urls.append(url)
+                if url == "http://192.168.1.88/health":
+                    return _FakeResp(200, {
+                        "ok": True,
+                        "codec": "opus",
+                        "hostname": "esp32-smart-butler",
+                        "mac": "9c:9e:6e:e2:d1:d8",
+                        "rssi": -55,
+                        "server_host": "192.168.1.50",
+                        "server_port": 8080,
+                        "ws_connected": False,
+                    })
+                if url.startswith("http://192.168.1.88/set_server"):
+                    return _FakeResp(200, {"ok": True, "server_host": "192.168.1.100", "server_port": 8080})
+                return _FakeResp(404, {})
+
+        with patch("lan_presence.get_local_network_info", new=AsyncMock(return_value={
+            "iface": "wlan0", "local_ip": "192.168.1.100", "prefix_len": "24", "gateway_ip": "192.168.1.1",
+        })), \
+             patch("esp32_audio.aiohttp.ClientSession", return_value=_FakeSess()):
+            # Đặt sẵn active_ws_clients=1 khi kiểm tra adopt để không chờ 3.5s sleep
+            mgr.active_ws_clients = 1
+            res = await mgr.discover_speaker_on_lan(candidate_ips=["192.168.1.88"], adopt=True)
+
+        self.assertTrue(res["found"])
+        self.assertEqual(res["ip"], "192.168.1.88")
+        self.assertTrue(res["adopted"])
+        self.assertEqual(mgr.esp32_ip, "192.168.1.88")
+        self.assertEqual(database.get_metadata("esp32_speaker_ip"), "192.168.1.88")
+        self.assertEqual(database.get_metadata("esp32_speaker_mac"), "9c:9e:6e:e2:d1:d8")
+        self.assertTrue(any("/set_server?host=192.168.1.100&port=8080" in u for u in called_urls))
+
+        app = web_dashboard.create_app(bot=None, target_user_id=781)
+        fake_scan_out = {"found": True, "ip": "192.168.1.88", "rssi": -55, "adopted": True, "ws_connected": True, "jukebox": mgr.get_status_snapshot()}
+        with patch.object(esp32_audio, "get_manager", return_value=mgr), \
+             patch.object(mgr, "discover_speaker_on_lan", new=AsyncMock(return_value=fake_scan_out)) as mock_scan:
+            async with TestClient(TestServer(app)) as client:
+                pin = web_dashboard.get_effective_pin()
+                await client.post("/api/login", json={"pin": pin})
+                r = await client.post("/api/jukebox/scan", json={"adopt": True})
+                self.assertEqual(r.status, 200)
+                body = await r.json()
+                self.assertTrue(body["ok"])
+                self.assertTrue(body["data"]["found"])
+                mock_scan.assert_awaited_once_with(adopt=True)
+
 
 if __name__ == "__main__":
     unittest.main()
