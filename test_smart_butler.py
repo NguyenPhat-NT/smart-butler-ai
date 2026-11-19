@@ -752,6 +752,65 @@ class TestSyncedSmartHomeAndAntiRepetitionFeatures(unittest.IsolatedAsyncioTestC
             "TRÚC NHÂN ft. MIN CHUYỆN TÌNH TỨ CỨ TỪ TỪ TÍNH",
         )
 
+    async def test_gemini_503_failover_and_temporary_deprioritize(self):
+        class FakeResp:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def text(self):
+                return self._body if isinstance(self._body, str) else json.dumps(self._body)
+
+            async def json(self):
+                return self._body
+
+        called_urls = []
+
+        class FakeSession:
+            def post(self, url, *args, **kwargs):
+                called_urls.append(url)
+                if "busy-model" in url:
+                    return FakeResp(503, "high demand")
+                return FakeResp(200, {"candidates": [{"content": {"parts": [{"text": "preview_ok"}]}}]})
+
+        gemini_client._MODEL_UNHEALTHY_UNTIL.clear()
+        gemini_client._KEY_COOLDOWN.clear()
+        try:
+            with (
+                patch.object(config, "GEMINI_API_KEYS", ["k1", "k2"]),
+                patch.object(gemini_client, "get_api_keys", return_value=["k1", "k2"]),
+                patch.object(gemini_client, "get_session", return_value=FakeSession()),
+            ):
+                r1 = await gemini_client.call_gemini_api(
+                    model="busy-model",
+                    fallback_models=["gemini-3-flash-preview"],
+                    system_instruction="sys",
+                    contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+                    response_json=False,
+                )
+                r2 = await gemini_client.call_gemini_api(
+                    model="busy-model",
+                    fallback_models=["gemini-3-flash-preview"],
+                    system_instruction="sys",
+                    contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+                    response_json=False,
+                )
+        finally:
+            gemini_client._MODEL_UNHEALTHY_UNTIL.clear()
+
+        self.assertEqual(r1, "preview_ok")
+        self.assertEqual(r2, "preview_ok")
+        self.assertEqual(len(called_urls), 3)
+        self.assertIn("busy-model", called_urls[0])
+        self.assertIn("gemini-3-flash-preview", called_urls[1])
+        self.assertIn("gemini-3-flash-preview", called_urls[2])
+
 
 if __name__ == "__main__":
     unittest.main()

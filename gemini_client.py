@@ -24,8 +24,8 @@ GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta/fil
 VN_TZ = datetime.timezone(datetime.timedelta(hours=getattr(config, "TIMEZONE_OFFSET_HOURS", 7)))
 
 # Ngân sách thời gian cho 1 lần gọi và cho toàn bộ chuỗi fallback.
-# Đặt 12s/lần trên tổng 42s để kịp thử đủ >=3 tổ hợp model/key dự phòng khi model chính treo.
-REQUEST_TIMEOUT_SEC = 12.0
+# Đặt 10s/lần trên tổng 42s để kịp chuyển nhanh qua model dự phòng nếu 1 model bị 503/treo.
+REQUEST_TIMEOUT_SEC = 10.0
 TOTAL_DEADLINE_SEC = 42.0
 
 # Ghi nhớ API key đã upload từng file_uri (Files API gắn URI theo GCP Project của key upload)
@@ -72,6 +72,10 @@ QUOTA_COOLDOWN_DEFAULT_SEC = 30.0
 #   dù key_role='chat' và key_role='memory' sắp xếp thứ tự key khác nhau.
 _KEY_COOLDOWN: Dict[Tuple[str, str, str], float] = {}
 _CHAT_RR_COUNTER = 0
+# Lưu tạm các model vừa trả HTTP 5xx (503 high demand) hoặc treo timeout để đẩy xuống cuối hàng đợi 60s
+_EMERGENCY_FALLBACK_MODELS = ("gemini-flash-lite-latest", "gemini-3-flash-preview")
+_MODEL_UNHEALTHY_COOLDOWN_SEC = 60.0
+_MODEL_UNHEALTHY_UNTIL: Dict[str, float] = {}
 
 # Gemini giới hạn request ~20MB; ảnh nhúng base64 phình 4/3 nên chặn tổng nhị phân ở 12MB.
 MAX_INLINE_MEDIA_BYTES = 12 * 1024 * 1024
@@ -147,6 +151,45 @@ def _parse_retry_delay(err_text: str) -> Optional[float]:
         return None
 
 
+def _build_candidate_models(
+    model: str,
+    key_role: str,
+    fallback_models: Optional[List[str]],
+    tools: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """Xây danh sách model theo thứ tự ưu tiên và đẩy model vừa 503/timeout xuống cuối tạm thời."""
+    global _CHAT_RR_COUNTER
+    if fallback_models is not None:
+        raw_candidates = [model] + list(fallback_models)
+    elif key_role == "memory":
+        raw_candidates = [model, MEMORY_MODEL, CHAT_MODEL, *_EMERGENCY_FALLBACK_MODELS]
+    elif not tools and model == CHAT_MODEL and MEMORY_MODEL and MEMORY_MODEL != CHAT_MODEL:
+        use_alt_first = (_CHAT_RR_COUNTER % 2) == 1
+        _CHAT_RR_COUNTER += 1
+        pair = [MEMORY_MODEL, CHAT_MODEL] if use_alt_first else [CHAT_MODEL, MEMORY_MODEL]
+        raw_candidates = [*pair, *_EMERGENCY_FALLBACK_MODELS]
+    else:
+        raw_candidates = [model, CHAT_MODEL, MEMORY_MODEL, *_EMERGENCY_FALLBACK_MODELS]
+
+    deduped: List[str] = []
+    for candidate in raw_candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+
+    now_mono = time.monotonic()
+    for m_name, until in list(_MODEL_UNHEALTHY_UNTIL.items()):
+        if until <= now_mono:
+            _MODEL_UNHEALTHY_UNTIL.pop(m_name, None)
+
+    return [
+        m_name
+        for _, m_name in sorted(
+            enumerate(deduped),
+            key=lambda item: (1 if _MODEL_UNHEALTHY_UNTIL.get(item[1], 0.0) > now_mono else 0, item[0]),
+        )
+    ]
+
+
 async def call_gemini_api(model: str, system_instruction: str, contents: List[Dict[str, Any]],
                           response_json: bool = True,
                           key_role: str = "chat",
@@ -160,33 +203,10 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
                           allow_cooldown_wait: bool = True) -> str:
     """
     Gọi trực tiếp Gemini REST API qua aiohttp - Tối ưu cực đại cho RAM 400MB.
-    Có deadline tổng 42s, timeout 12s/lần, fail-fast khi mất DNS/mạng cục bộ,
-    xoay vòng đa API Key, cân bằng tải luân phiên 3.1/3.5 và cooldown theo (model, key, scope).
+    Có deadline tổng 42s, timeout 10s/lần, fail-fast khi mất DNS/mạng cục bộ,
+    xoay vòng đa API Key, cân bằng tải luân phiên và né tạm thời model 503/timeout.
     """
-    global _CHAT_RR_COUNTER
-
-    if fallback_models is not None:
-        raw_candidates = [model] + list(fallback_models)
-    elif key_role == "memory":
-        raw_candidates = [model, MEMORY_MODEL, CHAT_MODEL, "gemini-flash-lite-latest"]
-    else:
-        # Cân bằng tải (round-robin) cho các lượt chat giữa CHAT_MODEL (3.1) và MEMORY_MODEL (3.5)
-        # để tận dụng trọn vẹn hạn mức Free Tier độc lập của cả hai model (15 RPM/project/model).
-        if not tools and model == CHAT_MODEL and MEMORY_MODEL and MEMORY_MODEL != CHAT_MODEL:
-            use_alt_first = (_CHAT_RR_COUNTER % 2) == 1
-            _CHAT_RR_COUNTER += 1
-            raw_candidates = (
-                [MEMORY_MODEL, CHAT_MODEL, "gemini-flash-lite-latest"]
-                if use_alt_first
-                else [CHAT_MODEL, MEMORY_MODEL, "gemini-flash-lite-latest"]
-            )
-        else:
-            raw_candidates = [model, CHAT_MODEL, MEMORY_MODEL, "gemini-flash-lite-latest"]
-
-    candidate_models: List[str] = []
-    for candidate in raw_candidates:
-        if candidate and candidate not in candidate_models:
-            candidate_models.append(candidate)
+    candidate_models = _build_candidate_models(model, key_role, fallback_models, tools)
 
     api_keys = get_api_keys(role=key_role)
     if not api_keys and GEMINI_API_KEY:
@@ -230,7 +250,8 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
         quota_hits = 0
         pending_cooldowns: List[float] = []
 
-        for cur_model in candidate_models:
+        for model_idx, cur_model in enumerate(candidate_models):
+            has_more_models = (model_idx + 1) < len(candidate_models)
             for key_idx, api_key in enumerate(api_keys):
                 remaining = deadline - time.monotonic()
                 if remaining <= 1:
@@ -260,6 +281,7 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
                             data = await resp.json()
                             text = _extract_text(data)
                             if text:
+                                _MODEL_UNHEALTHY_UNTIL.pop(cur_model, None)
                                 logger.info(
                                     f"🤖 Gemini [{cur_model} | role={key_role} | key#{key_idx + 1}] OK ({elapsed:.1f}s)"
                                 )
@@ -284,7 +306,10 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
                             continue
                         if resp.status in (500, 502, 503, 504):
                             last_err = RuntimeError(f"HTTP {resp.status}: {err_text}")
-                            continue  # nghẽn tạm thời -> thử key/model khác
+                            _MODEL_UNHEALTHY_UNTIL[cur_model] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
+                            if has_more_models:
+                                break  # Nghẽn server theo model -> sang model dự phòng ngay
+                            continue
                         if resp.status in (403, 404) or (
                             resp.status == 400 and ("api_key_invalid" in err_text.lower() or "api key" in err_text.lower())
                         ):
@@ -293,11 +318,16 @@ async def call_gemini_api(model: str, system_instruction: str, contents: List[Di
                             continue  # key lỗi hoặc model alias không hợp lệ -> thử key/model dự phòng
                         raise GeminiFatalError(f"Gemini API error code: {resp.status} - {err_text}")
                 except asyncio.TimeoutError as e:
+                    elapsed = time.monotonic() - attempt_started
                     last_err = e
                     logger.warning(
                         f"Gemini [{cur_model} | key#{key_idx + 1}] timeout sau "
-                        f"{time.monotonic() - attempt_started:.1f}s"
+                        f"{elapsed:.1f}s"
                     )
+                    if elapsed >= 6.0:
+                        _MODEL_UNHEALTHY_UNTIL[cur_model] = time.monotonic() + _MODEL_UNHEALTHY_COOLDOWN_SEC
+                        if has_more_models:
+                            break  # Model treo >6s -> chuyển sang model dự phòng ngay thay vì đốt key#2
                 except GeminiFatalError:
                     raise
                 except (aiohttp.ClientConnectorError, socket.gaierror) as e:
@@ -2822,7 +2852,7 @@ YÊU CẦU ĐẦU RA (3 mục ngắn gọn, thực tế):
 """
 
     contents = [{"role": "user", "parts": [{"text": review_prompt}]}]
-    fallbacks = [m for m in (CHAT_MODEL, MEMORY_MODEL, "gemini-flash-lite-latest") if m != REVIEW_MODEL]
+    fallbacks = [m for m in (CHAT_MODEL, MEMORY_MODEL, *_EMERGENCY_FALLBACK_MODELS) if m != REVIEW_MODEL]
     return await call_gemini_api(
         model=REVIEW_MODEL,
         system_instruction="Bạn là trợ lý tổng kết vận hành Smart Butler gọn gàng, chính xác.",
