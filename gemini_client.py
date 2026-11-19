@@ -275,6 +275,7 @@ async def _call_openrouter_fallback(
     if not or_models_cfg:
         or_models_cfg = [
             "google/gemma-4-31b-it:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
             "baidu/ernie-5.5-flash-preview:free",
             "google/gemma-4-26b-a4b-it:free",
             "openrouter/free",
@@ -312,7 +313,7 @@ async def _call_openrouter_fallback(
                 "temperature": float(temperature),
                 "max_tokens": int(max_output_tokens),
             }
-            if response_json and or_model != "openrouter/free":
+            if response_json and or_model not in ("openrouter/free", "nvidia/nemotron-3-ultra-550b-a55b:free"):
                 payload["response_format"] = {"type": "json_object"}
 
             attempt_started = time.monotonic()
